@@ -13,11 +13,11 @@ patches {
 }
 
 tasks {
-    register<JavaExec>("generatePatchesFiles") {
-        description = "Generate patches files"
-        dependsOn(build)
-        classpath = sourceSets["main"].runtimeClasspath
-        mainClass.set("app.revanced.generator.MainKt")
+    // Disable sources and javadoc jars so only patches.rvp is produced
+    withType<Jar> {
+        if (name.contains("sources", ignoreCase = true) || name.contains("javadoc", ignoreCase = true)) {
+            enabled = false
+        }
     }
 }
 
