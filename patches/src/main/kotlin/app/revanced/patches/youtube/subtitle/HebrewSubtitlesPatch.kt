@@ -1,10 +1,9 @@
-@file:Suppress("CONTEXT_RECEIVERS_DEPRECATED")
-
 package app.revanced.patches.youtube.subtitle
 
 import app.revanced.patcher.extensions.InstructionExtensions.addInstructionsWithLabels
 import app.revanced.patcher.extensions.InstructionExtensions.getInstruction
 import app.revanced.patcher.fingerprint
+import app.revanced.patcher.patch.Patch
 import app.revanced.patcher.patch.PatchException
 import app.revanced.patcher.patch.bytecodePatch
 import app.revanced.patcher.util.smali.ExternalLabel
@@ -51,7 +50,7 @@ private val transcriptUrlFingerprint = fingerprint {
 }
 
 @Suppress("unused")
-val hebrewSubtitlesPatch = bytecodePatch(
+val hebrewSubtitlesPatch: Patch<*> = bytecodePatch(
     "Hebrew auto-translated subtitles",
     "Automatically adds Hebrew as the translation language for video subtitles.",
 ) {
