@@ -27,14 +27,14 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           chmod +x gradlew
-          ./gradlew :patches:build
+          ./gradlew :patches:buildAndroid
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.0.${{ github.run_number }}
           name: Hebrew Subtitle Patch v1.0.${{ github.run_number }}
-          files: "**/*.rvp"
+          files: "patches/build/libs/*.rvp"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
