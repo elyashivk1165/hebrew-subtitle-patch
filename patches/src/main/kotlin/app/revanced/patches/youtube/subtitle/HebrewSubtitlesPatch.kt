@@ -1,3 +1,5 @@
+@file:Suppress("CONTEXT_RECEIVERS_DEPRECATED")
+
 package app.revanced.patches.youtube.subtitle
 
 import app.revanced.patcher.extensions.InstructionExtensions.addInstructionsWithLabels
