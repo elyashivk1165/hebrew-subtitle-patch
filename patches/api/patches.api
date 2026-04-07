@@ -1,0 +1,4 @@
+public final class app/revanced/patches/youtube/subtitle/HebrewSubtitlesPatchKt {
+	public static final fun getHebrewSubtitlesPatch ()Lapp/revanced/patcher/patch/BytecodePatch;
+}
+
