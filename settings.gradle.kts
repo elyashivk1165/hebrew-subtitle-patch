@@ -17,6 +17,5 @@ pluginManagement {
 }
 
 plugins {
-    id("app.revanced.patches") version "1.0.0-dev.5"
+    id("app.revanced.patches") version "1.0.0-dev.10"
 }
-
