@@ -21,3 +21,9 @@ tasks {
     }
 }
 
+kotlin {
+    compilerOptions {
+        freeCompilerArgs = listOf("-Xcontext-receivers")
+    }
+}
+
