@@ -63,17 +63,16 @@ val hebrewSubtitlesPatch = bytecodePatch(
                 urlIndex,
                 """
                     const-string v0, "timedtext"
-                    invoke-virtual { v${'$'}urlRegister, v0 }, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
+                    invoke-virtual { v$urlRegister, v0 }, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
                     move-result v0
                     if-eqz v0, :skip
                     const-string v0, "tlang="
-                    invoke-virtual { v${'$'}urlRegister, v0 }, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
+                    invoke-virtual { v$urlRegister, v0 }, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
                     move-result v0
                     if-nez v0, :skip
                     const-string v0, "&tlang=iw"
-                    invoke-virtual { v${'$'}urlRegister, v0 }, Ljava/lang/String;->concat(Ljava/lang/String;)Ljava/lang/String;
-                    move-result-object v${'$'}urlRegister
-                    :skip
+                    invoke-virtual { v$urlRegister, v0 }, Ljava/lang/String;->concat(Ljava/lang/String;)Ljava/lang/String;
+                    move-result-object v$urlRegister
                 """,
                 ExternalLabel("skip", getInstruction(urlIndex))
             )
