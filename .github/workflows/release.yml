@@ -25,7 +25,9 @@ jobs:
       - name: Build
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./gradlew clean generatePatchesFiles
+        run: |
+          chmod +x gradlew
+          ./gradlew clean generatePatchesFiles
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
