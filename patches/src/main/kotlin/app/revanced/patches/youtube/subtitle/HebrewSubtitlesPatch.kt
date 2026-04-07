@@ -2,50 +2,51 @@ package app.revanced.patches.youtube.subtitle
 
 import app.revanced.patcher.extensions.InstructionExtensions.addInstructionsWithLabels
 import app.revanced.patcher.extensions.InstructionExtensions.getInstruction
+import app.revanced.patcher.fingerprint
+import app.revanced.patcher.patch.PatchException
 import app.revanced.patcher.patch.bytecodePatch
 import app.revanced.patcher.util.smali.ExternalLabel
-import app.revanced.util.fingerprint.legacyFingerprint
-import app.revanced.util.fingerprint.matchOrThrow
-import app.revanced.util.getReference
-import app.revanced.util.indexOfFirstInstruction
-import app.revanced.util.or
 import com.android.tools.smali.dexlib2.AccessFlags
 import com.android.tools.smali.dexlib2.Opcode
 import com.android.tools.smali.dexlib2.iface.Method
 import com.android.tools.smali.dexlib2.iface.instruction.FiveRegisterInstruction
-import com.android.tools.smali.dexlib2.iface.reference.MethodReference
+import com.android.tools.smali.dexlib2.iface.instruction.ReferenceInstruction
 
-private val transcriptUrlFingerprint = legacyFingerprint(
-    name = "transcriptUrlFingerprint",
-    returnType = "L",
-    accessFlags = AccessFlags.PUBLIC or AccessFlags.FINAL,
-    customFingerprint = { method, _ ->
-        indexOfNewUrlRequestBuilderInstruction(method) >= 0 &&
-        indexOfBuildInstruction(method) >= 0 &&
-        indexOfUploadDataProvidersInstruction(method) >= 0
-    }
-)
+private fun Method.findInstructionIndex(filter: (com.android.tools.smali.dexlib2.iface.instruction.Instruction) -> Boolean): Int {
+    val impl = implementation ?: return -1
+    return impl.instructions.indexOfFirst(filter)
+}
 
-private fun indexOfNewUrlRequestBuilderInstruction(method: Method) =
-    method.indexOfFirstInstruction {
-        opcode == Opcode.INVOKE_VIRTUAL &&
-        getReference<MethodReference>().toString() ==
+private fun Method.indexOfNewUrlRequestBuilderInstruction() =
+    findInstructionIndex { instruction ->
+        instruction.opcode == Opcode.INVOKE_VIRTUAL &&
+        (instruction as? ReferenceInstruction)?.reference?.toString() ==
             "Lorg/chromium/net/CronetEngine;->newUrlRequestBuilder(Ljava/lang/String;Lorg/chromium/net/UrlRequest\$Callback;Ljava/util/concurrent/Executor;)Lorg/chromium/net/UrlRequest\$Builder;"
     }
 
-private fun indexOfBuildInstruction(method: Method) =
-    method.indexOfFirstInstruction {
-        opcode == Opcode.INVOKE_VIRTUAL &&
-        getReference<MethodReference>().toString() ==
+private fun Method.indexOfBuildInstruction() =
+    findInstructionIndex { instruction ->
+        instruction.opcode == Opcode.INVOKE_VIRTUAL &&
+        (instruction as? ReferenceInstruction)?.reference?.toString() ==
             "Lorg/chromium/net/UrlRequest\$Builder;->build()Lorg/chromium/net/UrlRequest;"
     }
 
-private fun indexOfUploadDataProvidersInstruction(method: Method) =
-    method.indexOfFirstInstruction {
-        opcode == Opcode.INVOKE_STATIC &&
-        getReference<MethodReference>().toString() ==
+private fun Method.indexOfUploadDataProvidersInstruction() =
+    findInstructionIndex { instruction ->
+        instruction.opcode == Opcode.INVOKE_STATIC &&
+        (instruction as? ReferenceInstruction)?.reference?.toString() ==
             "Lorg/chromium/net/UploadDataProviders;->create(Ljava/nio/ByteBuffer;)Lorg/chromium/net/UploadDataProvider;"
     }
+
+private val transcriptUrlFingerprint = fingerprint {
+    accessFlags(AccessFlags.PUBLIC, AccessFlags.FINAL)
+    returns("L")
+    custom { method, _ ->
+        method.indexOfNewUrlRequestBuilderInstruction() >= 0 &&
+        method.indexOfBuildInstruction() >= 0 &&
+        method.indexOfUploadDataProvidersInstruction() >= 0
+    }
+}
 
 @Suppress("unused")
 val hebrewSubtitlesPatch = bytecodePatch(
@@ -55,8 +56,11 @@ val hebrewSubtitlesPatch = bytecodePatch(
     compatibleWith("com.google.android.youtube")
 
     execute {
-        transcriptUrlFingerprint.matchOrThrow().method.apply {
-            val urlIndex = indexOfNewUrlRequestBuilderInstruction(this)
+        val classDef = transcriptUrlFingerprint.classDefOrNull
+            ?: throw PatchException("Could not find transcript URL method")
+
+        transcriptUrlFingerprint.match(classDef).method.apply {
+            val urlIndex = indexOfNewUrlRequestBuilderInstruction()
             val urlRegister = getInstruction<FiveRegisterInstruction>(urlIndex).registerD
 
             addInstructionsWithLabels(
