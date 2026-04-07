@@ -27,7 +27,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           chmod +x gradlew
-          ./gradlew clean generatePatchesFiles
+          ./gradlew :patches:generatePatchesFiles
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -37,3 +37,4 @@ jobs:
           files: "**/*.rvp"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
