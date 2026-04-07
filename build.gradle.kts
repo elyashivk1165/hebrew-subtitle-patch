@@ -1,3 +1,7 @@
+plugins {
+    id("app.revanced.patches")
+}
+
 group = "app.revanced"
 version = "1.0.0"
 
@@ -12,3 +16,4 @@ patches {
         license = "GNU General Public License v3.0"
     }
 }
+
