@@ -39,6 +39,7 @@ private fun Method.indexOfUploadDataProvidersInstruction() =
             "Lorg/chromium/net/UploadDataProviders;->create(Ljava/nio/ByteBuffer;)Lorg/chromium/net/UploadDataProvider;"
     }
 
+@Suppress("DEPRECATION")
 private val transcriptUrlFingerprint = fingerprint {
     accessFlags(AccessFlags.PUBLIC, AccessFlags.FINAL)
     returns("L")
@@ -49,8 +50,8 @@ private val transcriptUrlFingerprint = fingerprint {
     }
 }
 
-@Suppress("unused")
-val hebrewSubtitlesPatch: Patch<*> = bytecodePatch(
+@Suppress("unused", "DEPRECATION")
+val hebrewSubtitlesPatch: Patch = bytecodePatch(
     "Hebrew auto-translated subtitles",
     "Automatically adds Hebrew as the translation language for video subtitles.",
 ) {
@@ -68,16 +69,16 @@ val hebrewSubtitlesPatch: Patch<*> = bytecodePatch(
                 urlIndex,
                 """
                     const-string v0, "timedtext"
-                    invoke-virtual { v$urlRegister, v0 }, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
+                    invoke-virtual { v${'$'}urlRegister, v0 }, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
                     move-result v0
                     if-eqz v0, :skip
                     const-string v0, "tlang="
-                    invoke-virtual { v$urlRegister, v0 }, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
+                    invoke-virtual { v${'$'}urlRegister, v0 }, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
                     move-result v0
                     if-nez v0, :skip
                     const-string v0, "&tlang=iw"
-                    invoke-virtual { v$urlRegister, v0 }, Ljava/lang/String;->concat(Ljava/lang/String;)Ljava/lang/String;
-                    move-result-object v$urlRegister
+                    invoke-virtual { v${'$'}urlRegister, v0 }, Ljava/lang/String;->concat(Ljava/lang/String;)Ljava/lang/String;
+                    move-result-object v${'$'}urlRegister
                 """,
                 ExternalLabel("skip", getInstruction(urlIndex))
             )
