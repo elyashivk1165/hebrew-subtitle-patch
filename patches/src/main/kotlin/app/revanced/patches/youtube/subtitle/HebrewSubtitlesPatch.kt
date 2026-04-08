@@ -42,12 +42,6 @@ private val transcriptUrlFingerprint = fingerprint {
     }
 }
 
-// Fingerprint for the player bottom controls inflate — looks for ViewStub.inflate() calls
-// in a class that manages the bottom UI container.
-@Suppress("DEPRECATION")
-private val playerBottomControlsFingerprint = fingerprint {
-    strings("bottomUiContainerStub")
-}
 
 @Suppress("unused", "DEPRECATION")
 val hebrewSubtitlesPatch: Patch = bytecodePatch(
@@ -99,25 +93,5 @@ val hebrewSubtitlesPatch: Patch = bytecodePatch(
             )
         }
 
-        // ── Player button ────────────────────────────────────────────────────────
-        val btnClassDef = playerBottomControlsFingerprint.classDefOrNull
-        if (btnClassDef != null) {
-            playerBottomControlsFingerprint.match(btnClassDef).method.apply {
-                // Use v0 at the top of the method — a safe local register at method entry.
-                // We restore it to 0 before any original code runs.
-                addInstructionsWithLabels(
-                    0,
-                    """
-                        invoke-static { }, Landroid/app/ActivityThread;->currentActivity()Landroid/app/Activity;
-                        move-result-object v0
-                        if-eqz v0, :no_activity
-                        invoke-static { v0 }, Lapp/revanced/extension/youtube/subtitle/HebrewSubtitlesHelper;->initButton(Landroid/app/Activity;)V
-                        :no_activity
-                        const/4 v0, 0x0
-                    """
-                )
-            }
-        }
-        // If fingerprint not found, skip button silently — URL injection still works.
     }
 }
