@@ -55,7 +55,7 @@ val hebrewSubtitlesPatch: Patch = bytecodePatch(
     "Hebrew auto-translated subtitles",
     "Automatically adds Hebrew as the translation language for video subtitles.",
 ) {
-    compatibleWith("com.google.android.youtube")
+    compatibleWith("com.google.android.youtube" to (null as Set<String>?))
 
     execute {
         val classDef = transcriptUrlFingerprint.classDefOrNull
