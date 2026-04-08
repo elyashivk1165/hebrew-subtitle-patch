@@ -79,6 +79,7 @@ val hebrewSubtitlesPatch: Patch = bytecodePatch(
                     const-string v0, "&tlang=iw"
                     invoke-virtual { v$urlRegister, v0 }, Ljava/lang/String;->concat(Ljava/lang/String;)Ljava/lang/String;
                     move-result-object v$urlRegister
+                    const/4 v0, 0x0
                 """,
                 ExternalLabel("skip", getInstruction(urlIndex))
             )
