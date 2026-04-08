@@ -6,7 +6,6 @@ import app.revanced.patcher.fingerprint
 import app.revanced.patcher.patch.Patch
 import app.revanced.patcher.patch.PatchException
 import app.revanced.patcher.patch.bytecodePatch
-import app.revanced.patcher.patch.resourcePatch
 import app.revanced.patcher.util.smali.ExternalLabel
 import com.android.tools.smali.dexlib2.AccessFlags
 import com.android.tools.smali.dexlib2.Opcode
@@ -43,37 +42,12 @@ private val transcriptUrlFingerprint = fingerprint {
     }
 }
 
-// Adds a SwitchPreference to revanced_prefs.xml (created by RVX settingsPatch).
-// If the file is not present (RVX not applied alongside), this silently skips.
-@Suppress("DEPRECATION")
-private val hebrewSubtitlesResourcePatch = resourcePatch {
-    execute {
-        try {
-            document("res/xml/revanced_prefs.xml").apply {
-                documentElement.appendChild(
-                    createElement("SwitchPreference").also {
-                        it.setAttribute("android:key", "revanced_hebrew_subtitles_enabled")
-                        it.setAttribute("android:title", "Hebrew auto-translated subtitles")
-                        it.setAttribute("android:summaryOn", "Subtitles will be auto-translated to Hebrew")
-                        it.setAttribute("android:summaryOff", "Hebrew subtitle auto-translation is disabled")
-                        it.setAttribute("android:defaultValue", "true")
-                    }
-                )
-            }.close()
-        } catch (_: Exception) {
-            // revanced_prefs.xml not available (RVX settings not applied alongside), skip.
-        }
-    }
-}
-
 @Suppress("unused", "DEPRECATION")
 val hebrewSubtitlesPatch: Patch = bytecodePatch(
     "Hebrew auto-translated subtitles",
-    "Automatically adds Hebrew as the translation language for video subtitles. " +
-    "Toggle via RVX settings: 'Hebrew auto-translated subtitles'.",
+    "Automatically adds Hebrew as the translation language for video subtitles.",
 ) {
     compatibleWith("com.google.android.youtube" to (null as Set<String>?))
-    dependsOn(hebrewSubtitlesResourcePatch)
 
     execute {
         val classDef = transcriptUrlFingerprint.classDefOrNull
@@ -84,11 +58,10 @@ val hebrewSubtitlesPatch: Patch = bytecodePatch(
             val invoke = getInstruction<FiveRegisterInstruction>(urlIndex)
             val urlRegister = invoke.registerD
 
-            // Avoid clobbering the invoke instruction's own registers.
+            // Find a temp register that is not used by the invoke instruction,
+            // to avoid corrupting the engine/callback/executor references.
             val usedRegs = setOf(invoke.registerC, invoke.registerD, invoke.registerE, invoke.registerF)
-            // Use first free register within the method's existing register count.
-            val maxReg = implementation!!.registerCount - 1
-            val tempReg = (0..maxReg).first { it !in usedRegs }
+            val tempReg = (0..15).first { it !in usedRegs }
 
             addInstructionsWithLabels(
                 urlIndex,
