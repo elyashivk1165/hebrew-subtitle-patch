@@ -1,10 +1,11 @@
 package app.revanced.extension.youtube.subtitle;
 
-import android.app.Activity;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -14,108 +15,163 @@ import android.widget.TextView;
 import java.lang.ref.WeakReference;
 
 public final class HebrewSubtitlesHelper {
-    private static final String PREFS_NAME = "revanced_prefs";
-    private static final String KEY_ENABLED = "revanced_hebrew_subtitles_enabled";
-    private static final String KEY_BUTTON_HIDDEN = "revanced_hebrew_subtitles_button_hidden";
-    private static final int BUTTON_VIEW_ID = 0x4865_6272; // "Hebr" as int
 
-    private static WeakReference<Activity> activityRef = new WeakReference<>(null);
+    private static final String PREFS   = "revanced_prefs";
+    private static final String KEY_ON  = "revanced_hebrew_subtitles_enabled";
 
+    private static WeakReference<View> btnRef = new WeakReference<>(null);
+
+    // ── URL interceptor hook ────────────────────────────────────────────────────
+
+    /**
+     * Injection point 0 – called by the URL interceptor before every
+     * CronetEngine.newUrlRequestBuilder() call.
+     * Returns true  → inject &tlang=iw
+     * Returns false → leave URL untouched
+     */
     public static boolean isEnabled(Context context) {
         try {
-            return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                    .getBoolean(KEY_ENABLED, true);
+            return context.getSharedPreferences(PREFS, 0)
+                          .getBoolean(KEY_ON, true);
         } catch (Exception e) {
             return true;
         }
     }
 
-    public static void toggle(Context context) {
+    // ── Player-button hooks (called from Smali injection points) ────────────────
+
+    /**
+     * Injection point 1 – called right after ViewStub.inflate() returns
+     * the youtube_controls_bottom_ui_container ConstraintLayout.
+     *
+     * We walk up the view hierarchy to find a FrameLayout parent so we can
+     * use Gravity.BOTTOM|END for clean positioning without needing
+     * ConstraintLayout.LayoutParams (which lives in a separate library).
+     */
+    public static void initializeButton(View controlsView) {
         try {
-            SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-            prefs.edit().putBoolean(KEY_ENABLED, !prefs.getBoolean(KEY_ENABLED, true)).apply();
-        } catch (Exception e) {
-            // ignore
-        }
+            Context ctx = controlsView.getContext();
+
+            // Remove stale button from a previous player session.
+            View old = btnRef.get();
+            if (old != null && old.getParent() instanceof ViewGroup) {
+                ((ViewGroup) old.getParent()).removeView(old);
+            }
+
+            // --- Build the toggle button ------------------------------------------
+            TextView btn = new TextView(ctx);
+            btn.setText("\u05E2\u05D1"); // "עב" (aleph-bet = Hebrew initials)
+            btn.setTextColor(Color.WHITE);
+            btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+            btn.setTypeface(null, Typeface.BOLD);
+            btn.setGravity(Gravity.CENTER);
+            btn.setVisibility(View.GONE);
+            btn.setAlpha(isEnabled(ctx) ? 1.0f : 0.35f);
+
+            GradientDrawable bg = new GradientDrawable();
+            bg.setShape(GradientDrawable.RECTANGLE);
+            bg.setCornerRadius(dp(ctx, 6));
+            bg.setColor(Color.argb(180, 0, 0, 0));
+            btn.setBackground(bg);
+
+            btn.setOnClickListener(v -> {
+                boolean nowOn = !isEnabled(ctx);
+                ctx.getSharedPreferences(PREFS, 0)
+                   .edit().putBoolean(KEY_ON, nowOn).apply();
+                v.setAlpha(nowOn ? 1.0f : 0.35f);
+                android.widget.Toast.makeText(
+                        ctx,
+                        nowOn ? "\u05DB\u05EA\u05D5\u05D1\u05D9\u05D5\u05EA \u05E2\u05D1\u05E8\u05D9\u05EA: \u05E4\u05E2\u05D9\u05DC"
+                              : "\u05DB\u05EA\u05D5\u05D1\u05D9\u05D5\u05EA \u05E2\u05D1\u05E8\u05D9\u05EA: \u05DB\u05D1\u05D5\u05D9",
+                        android.widget.Toast.LENGTH_SHORT).show();
+            });
+
+            // --- Attach to view hierarchy ----------------------------------------
+            int sizePx   = dp(ctx, 48);
+            int marginB  = dp(ctx, 80);
+            int marginR  = dp(ctx, 8);
+
+            // Walk up looking for a FrameLayout (player overlay is usually one).
+            ViewGroup frameParent = findFrameLayout(controlsView);
+
+            if (frameParent != null) {
+                FrameLayout.LayoutParams lp =
+                        new FrameLayout.LayoutParams(sizePx, sizePx);
+                lp.gravity     = Gravity.BOTTOM | Gravity.END;
+                lp.bottomMargin = marginB;
+                lp.rightMargin  = marginR;
+                btn.setLayoutParams(lp);
+                frameParent.addView(btn);
+            } else {
+                // Fallback: add directly to the bottom-controls container.
+                // Without ConstraintLayout.LayoutParams the view lands at (0,0)
+                // of the container, which is still visible and tappable.
+                ViewGroup container = (controlsView instanceof ViewGroup)
+                        ? (ViewGroup) controlsView
+                        : (ViewGroup) controlsView.getParent();
+                if (container == null) return;
+                container.addView(btn, new ViewGroup.LayoutParams(sizePx, sizePx));
+            }
+
+            btnRef = new WeakReference<>(btn);
+        } catch (Exception ignored) { /* never crash YouTube */ }
     }
 
     /**
-     * Called from YouTube's main Activity onCreate injection.
-     * Stores the Activity reference and schedules button creation after layout.
+     * Injection point 2 – player controls animated show/hide.
+     * Mirrors PlayerControlButton.setVisibility(visible, animated).
+     * (Called with p1=visible, p2=animated from the overlay-visibility method.)
      */
-    public static void setActivity(Activity activity) {
+    public static void setVisibility(boolean visible, boolean animated) {
         try {
-            activityRef = new WeakReference<>(activity);
-            // Post to decorView so we run after the layout is fully set up.
-            activity.getWindow().getDecorView().post(new Runnable() {
-                @Override
-                public void run() {
-                    initButton(activity);
-                }
-            });
-        } catch (Exception e) {
-            // ignore
-        }
+            View btn = btnRef.get();
+            if (btn != null) {
+                btn.setVisibility(visible ? View.VISIBLE : View.GONE);
+            }
+        } catch (Exception ignored) { }
     }
 
-    private static void initButton(Activity activity) {
+    /**
+     * Injection point 3 – immediate show/hide (no animation).
+     */
+    public static void setVisibilityImmediate(boolean visible) {
+        setVisibility(visible, false);
+    }
+
+    /**
+     * Injection point 4 – hide immediately on touch / hide-controls event.
+     * (Injected just after the setTranslationY call in the MotionEvent handler.)
+     */
+    public static void setVisibilityNegatedImmediate() {
         try {
-            if (activity == null || activity.isFinishing()) return;
+            View btn = btnRef.get();
+            if (btn != null) {
+                btn.setVisibility(View.GONE);
+            }
+        } catch (Exception ignored) { }
+    }
 
-            boolean buttonHidden = activity.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                    .getBoolean(KEY_BUTTON_HIDDEN, false);
-            if (buttonHidden) return;
+    // ── Helpers ─────────────────────────────────────────────────────────────────
 
-            View decorView = activity.getWindow().getDecorView();
-            if (!(decorView instanceof ViewGroup)) return;
-            ViewGroup root = (ViewGroup) decorView;
-
-            // Don't add twice
-            if (root.findViewById(BUTTON_VIEW_ID) != null) return;
-
-            TextView btn = new TextView(activity);
-            btn.setId(BUTTON_VIEW_ID);
-            btn.setText("עב");
-            btn.setTextColor(Color.WHITE);
-            btn.setTextSize(14f);
-            btn.setTypeface(Typeface.DEFAULT_BOLD);
-            btn.setPadding(px(activity, 14), px(activity, 8), px(activity, 14), px(activity, 8));
-            btn.setBackground(buildBg(activity, isEnabled(activity)));
-
-            btn.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    toggle(activity);
-                    boolean on = isEnabled(activity);
-                    v.setBackground(buildBg(activity, on));
-                    android.widget.Toast.makeText(activity,
-                            on ? "כתוביות עברית: פעיל" : "כתוביות עברית: כבוי",
-                            android.widget.Toast.LENGTH_SHORT).show();
-                }
-            });
-
-            FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT);
-            lp.gravity = Gravity.BOTTOM | Gravity.END;
-            lp.bottomMargin = px(activity, 80);
-            lp.rightMargin = px(activity, 16);
-
-            root.addView(btn, lp);
-        } catch (Exception e) {
-            // ignore
+    /**
+     * Walk up at most 6 levels looking for a FrameLayout.
+     * In YouTube's player the overlay is typically a FrameLayout that contains
+     * the bottom-controls ConstraintLayout as a child.
+     */
+    private static ViewGroup findFrameLayout(View from) {
+        ViewGroup candidate = (from.getParent() instanceof ViewGroup)
+                ? (ViewGroup) from.getParent() : null;
+        for (int i = 0; i < 6 && candidate != null; i++) {
+            if (candidate instanceof FrameLayout) return candidate;
+            candidate = (candidate.getParent() instanceof ViewGroup)
+                    ? (ViewGroup) candidate.getParent() : null;
         }
+        return null;
     }
 
-    private static android.graphics.drawable.GradientDrawable buildBg(Context ctx, boolean enabled) {
-        android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
-        bg.setShape(android.graphics.drawable.GradientDrawable.RECTANGLE);
-        bg.setCornerRadius(px(ctx, 6));
-        bg.setColor(enabled ? Color.argb(210, 0, 100, 200) : Color.argb(160, 50, 50, 50));
-        return bg;
-    }
-
-    private static int px(Context ctx, int dp) {
-        return Math.round(dp * ctx.getResources().getDisplayMetrics().density);
+    private static int dp(Context ctx, float dp) {
+        return Math.round(TypedValue.applyDimension(
+                TypedValue.COMPLEX_UNIT_DIP, dp,
+                ctx.getResources().getDisplayMetrics()));
     }
 }
