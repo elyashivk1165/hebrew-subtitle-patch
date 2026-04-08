@@ -63,23 +63,29 @@ val hebrewSubtitlesPatch: Patch = bytecodePatch(
 
         transcriptUrlFingerprint.match(classDef).method.apply {
             val urlIndex = indexOfNewUrlRequestBuilderInstruction()
-            val urlRegister = getInstruction<FiveRegisterInstruction>(urlIndex).registerD
+            val invoke = getInstruction<FiveRegisterInstruction>(urlIndex)
+            val urlRegister = invoke.registerD
+
+            // Find a temp register that is not used by the invoke instruction,
+            // to avoid corrupting the engine/callback/executor references.
+            val usedRegs = setOf(invoke.registerC, invoke.registerD, invoke.registerE, invoke.registerF)
+            val tempReg = (0..15).first { it !in usedRegs }
 
             addInstructionsWithLabels(
                 urlIndex,
                 """
-                    const-string v0, "timedtext"
-                    invoke-virtual { v$urlRegister, v0 }, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
-                    move-result v0
-                    if-eqz v0, :skip
-                    const-string v0, "tlang="
-                    invoke-virtual { v$urlRegister, v0 }, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
-                    move-result v0
-                    if-nez v0, :skip
-                    const-string v0, "&tlang=iw"
-                    invoke-virtual { v$urlRegister, v0 }, Ljava/lang/String;->concat(Ljava/lang/String;)Ljava/lang/String;
+                    const-string v$tempReg, "timedtext"
+                    invoke-virtual { v$urlRegister, v$tempReg }, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
+                    move-result v$tempReg
+                    if-eqz v$tempReg, :skip
+                    const-string v$tempReg, "tlang="
+                    invoke-virtual { v$urlRegister, v$tempReg }, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
+                    move-result v$tempReg
+                    if-nez v$tempReg, :skip
+                    const-string v$tempReg, "&tlang=iw"
+                    invoke-virtual { v$urlRegister, v$tempReg }, Ljava/lang/String;->concat(Ljava/lang/String;)Ljava/lang/String;
                     move-result-object v$urlRegister
-                    const/4 v0, 0x0
+                    const/4 v$tempReg, 0x0
                 """,
                 ExternalLabel("skip", getInstruction(urlIndex))
             )
