@@ -86,26 +86,13 @@ val hebrewSubtitlesPatch: Patch = bytecodePatch(
 
             // Avoid clobbering the invoke instruction's own registers.
             val usedRegs = setOf(invoke.registerC, invoke.registerD, invoke.registerE, invoke.registerF)
-            // Prefer high-numbered registers to reduce risk of overwriting method locals.
-            val freeRegs = (15 downTo 0).filter { it !in usedRegs }.take(3)
-            val tempReg  = freeRegs[0]
-            val tempReg2 = freeRegs[1]
-            val tempReg3 = freeRegs[2]
+            // Use first free register within the method's existing register count.
+            val maxReg = implementation!!.registerCount - 1
+            val tempReg = (0..maxReg).first { it !in usedRegs }
 
             addInstructionsWithLabels(
                 urlIndex,
                 """
-                    invoke-static { }, Landroid/app/ActivityThread;->currentApplication()Landroid/app/Application;
-                    move-result-object v$tempReg
-                    const-string v$tempReg2, "revanced_prefs"
-                    const/4 v$tempReg3, 0x0
-                    invoke-virtual { v$tempReg, v$tempReg2, v$tempReg3 }, Landroid/content/Context;->getSharedPreferences(Ljava/lang/String;I)Landroid/content/SharedPreferences;
-                    move-result-object v$tempReg
-                    const-string v$tempReg2, "revanced_hebrew_subtitles_enabled"
-                    const/4 v$tempReg3, 0x1
-                    invoke-interface { v$tempReg, v$tempReg2, v$tempReg3 }, Landroid/content/SharedPreferences;->getBoolean(Ljava/lang/String;Z)Z
-                    move-result v$tempReg
-                    if-eqz v$tempReg, :skip
                     const-string v$tempReg, "timedtext"
                     invoke-virtual { v$urlRegister, v$tempReg }, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
                     move-result v$tempReg
