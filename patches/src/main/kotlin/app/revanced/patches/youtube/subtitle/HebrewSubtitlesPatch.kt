@@ -81,6 +81,10 @@ val hebrewSubtitlesPatch: Patch = bytecodePatch(
                     invoke-virtual { v$urlRegister, v$tempReg }, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
                     move-result v$tempReg
                     if-nez v$tempReg, :skip
+                    const-string v$tempReg, "asr_langs="
+                    invoke-virtual { v$urlRegister, v$tempReg }, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
+                    move-result v$tempReg
+                    if-eqz v$tempReg, :skip
                     const-string v$tempReg, "&tlang=iw"
                     invoke-virtual { v$urlRegister, v$tempReg }, Ljava/lang/String;->concat(Ljava/lang/String;)Ljava/lang/String;
                     move-result-object v$urlRegister
