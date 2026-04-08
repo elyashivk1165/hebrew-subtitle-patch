@@ -1,5 +1,6 @@
 package app.revanced.patches.youtube.subtitle
 
+import app.revanced.patcher.extensions.InstructionExtensions.addInstruction
 import app.revanced.patcher.extensions.InstructionExtensions.addInstructionsWithLabels
 import app.revanced.patcher.extensions.InstructionExtensions.getInstruction
 import app.revanced.patcher.fingerprint
@@ -42,6 +43,17 @@ private val transcriptUrlFingerprint = fingerprint {
     }
 }
 
+// Finds YouTube's main Activity onCreate — used to hook setActivity().
+// "PostCreateCalledKey" is a stable string present in WatchWhileActivity/MainActivity.onCreate.
+@Suppress("DEPRECATION")
+private val mainActivityOnCreateFingerprint = fingerprint {
+    returns("V")
+    parameters("Landroid/os/Bundle;")
+    strings("PostCreateCalledKey")
+    custom { method, _ ->
+        method.definingClass.endsWith("Activity;") && method.name == "onCreate"
+    }
+}
 
 @Suppress("unused", "DEPRECATION")
 val hebrewSubtitlesPatch: Patch = bytecodePatch(
@@ -93,5 +105,14 @@ val hebrewSubtitlesPatch: Patch = bytecodePatch(
             )
         }
 
+        // ── Player button via Activity hook ──────────────────────────────────────
+        // p0 = "this" (the Activity). Inject at index 0 — before any existing code.
+        val activityClassDef = mainActivityOnCreateFingerprint.classDefOrNull
+        if (activityClassDef != null) {
+            mainActivityOnCreateFingerprint.match(activityClassDef).method.addInstruction(
+                0,
+                "invoke-static { p0 }, Lapp/revanced/extension/youtube/subtitle/HebrewSubtitlesHelper;->setActivity(Landroid/app/Activity;)V"
+            )
+        }
     }
 }

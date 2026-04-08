@@ -11,17 +11,20 @@ import android.view.ViewGroup;
 import android.widget.FrameLayout;
 import android.widget.TextView;
 
+import java.lang.ref.WeakReference;
+
 public final class HebrewSubtitlesHelper {
     private static final String PREFS_NAME = "revanced_prefs";
     private static final String KEY_ENABLED = "revanced_hebrew_subtitles_enabled";
     private static final String KEY_BUTTON_HIDDEN = "revanced_hebrew_subtitles_button_hidden";
+    private static final int BUTTON_VIEW_ID = 0x4865_6272; // "Hebr" as int
 
-    private static final int BUTTON_VIEW_ID = 0x7e_ab_1234; // arbitrary stable fake resource id
+    private static WeakReference<Activity> activityRef = new WeakReference<>(null);
 
     public static boolean isEnabled(Context context) {
         try {
-            SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-            return prefs.getBoolean(KEY_ENABLED, true);
+            return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .getBoolean(KEY_ENABLED, true);
         } catch (Exception e) {
             return true;
         }
@@ -30,37 +33,44 @@ public final class HebrewSubtitlesHelper {
     public static void toggle(Context context) {
         try {
             SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-            boolean current = prefs.getBoolean(KEY_ENABLED, true);
-            prefs.edit().putBoolean(KEY_ENABLED, !current).apply();
+            prefs.edit().putBoolean(KEY_ENABLED, !prefs.getBoolean(KEY_ENABLED, true)).apply();
         } catch (Exception e) {
             // ignore
         }
     }
 
-    public static boolean isButtonHidden(Context context) {
+    /**
+     * Called from YouTube's main Activity onCreate injection.
+     * Stores the Activity reference and schedules button creation after layout.
+     */
+    public static void setActivity(Activity activity) {
         try {
-            SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-            return prefs.getBoolean(KEY_BUTTON_HIDDEN, false);
+            activityRef = new WeakReference<>(activity);
+            // Post to decorView so we run after the layout is fully set up.
+            activity.getWindow().getDecorView().post(new Runnable() {
+                @Override
+                public void run() {
+                    initButton(activity);
+                }
+            });
         } catch (Exception e) {
-            return false;
+            // ignore
         }
     }
 
-    /**
-     * Called from the player bottom controls inflate method.
-     * Adds a small "עב" toggle button to the player control bar.
-     */
-    public static void initButton(Activity activity) {
+    private static void initButton(Activity activity) {
         try {
-            if (isButtonHidden(activity)) return;
+            if (activity == null || activity.isFinishing()) return;
 
-            // Find the root view — the button will be placed inside the decor view
-            // overlaid on the player controls area.
+            boolean buttonHidden = activity.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .getBoolean(KEY_BUTTON_HIDDEN, false);
+            if (buttonHidden) return;
+
             View decorView = activity.getWindow().getDecorView();
             if (!(decorView instanceof ViewGroup)) return;
             ViewGroup root = (ViewGroup) decorView;
 
-            // Avoid adding twice (e.g. if method is called more than once)
+            // Don't add twice
             if (root.findViewById(BUTTON_VIEW_ID) != null) return;
 
             TextView btn = new TextView(activity);
@@ -69,48 +79,43 @@ public final class HebrewSubtitlesHelper {
             btn.setTextColor(Color.WHITE);
             btn.setTextSize(14f);
             btn.setTypeface(Typeface.DEFAULT_BOLD);
-            btn.setPadding(18, 10, 18, 10);
-            btn.setBackground(createBackground(activity, isEnabled(activity)));
+            btn.setPadding(px(activity, 14), px(activity, 8), px(activity, 14), px(activity, 8));
+            btn.setBackground(buildBg(activity, isEnabled(activity)));
 
             btn.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
                     toggle(activity);
-                    boolean nowEnabled = isEnabled(activity);
-                    v.setBackground(createBackground(activity, nowEnabled));
-                    android.widget.Toast.makeText(
-                        activity,
-                        nowEnabled ? "כתוביות עברית: פעיל" : "כתוביות עברית: כבוי",
-                        android.widget.Toast.LENGTH_SHORT
-                    ).show();
+                    boolean on = isEnabled(activity);
+                    v.setBackground(buildBg(activity, on));
+                    android.widget.Toast.makeText(activity,
+                            on ? "כתוביות עברית: פעיל" : "כתוביות עברית: כבוי",
+                            android.widget.Toast.LENGTH_SHORT).show();
                 }
             });
 
-            // Position: bottom-right, just above the system navigation area
-            FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            );
-            params.gravity = Gravity.BOTTOM | Gravity.END;
-            params.bottomMargin = dpToPx(activity, 72);
-            params.rightMargin = dpToPx(activity, 12);
+            FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.gravity = Gravity.BOTTOM | Gravity.END;
+            lp.bottomMargin = px(activity, 80);
+            lp.rightMargin = px(activity, 16);
 
-            root.addView(btn, params);
+            root.addView(btn, lp);
         } catch (Exception e) {
-            // Silently ignore — URL injection still works without the button
+            // ignore
         }
     }
 
-    private static android.graphics.drawable.GradientDrawable createBackground(Context ctx, boolean enabled) {
+    private static android.graphics.drawable.GradientDrawable buildBg(Context ctx, boolean enabled) {
         android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
         bg.setShape(android.graphics.drawable.GradientDrawable.RECTANGLE);
-        bg.setCornerRadius(dpToPx(ctx, 6));
-        bg.setColor(enabled ? Color.argb(200, 0, 120, 215) : Color.argb(150, 60, 60, 60));
+        bg.setCornerRadius(px(ctx, 6));
+        bg.setColor(enabled ? Color.argb(210, 0, 100, 200) : Color.argb(160, 50, 50, 50));
         return bg;
     }
 
-    private static int dpToPx(Context ctx, int dp) {
-        float density = ctx.getResources().getDisplayMetrics().density;
-        return Math.round(dp * density);
+    private static int px(Context ctx, int dp) {
+        return Math.round(dp * ctx.getResources().getDisplayMetrics().density);
     }
 }
