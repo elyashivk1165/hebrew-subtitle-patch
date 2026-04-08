@@ -45,8 +45,7 @@ private val transcriptUrlFingerprint = fingerprint {
     returns("L")
     custom { method, _ ->
         method.indexOfNewUrlRequestBuilderInstruction() >= 0 &&
-        method.indexOfBuildInstruction() >= 0 &&
-        method.indexOfUploadDataProvidersInstruction() >= 0
+        method.indexOfBuildInstruction() >= 0
     }
 }
 
