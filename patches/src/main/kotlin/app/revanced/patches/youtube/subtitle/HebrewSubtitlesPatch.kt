@@ -1,6 +1,5 @@
 package app.revanced.patches.youtube.subtitle
 
-import app.revanced.patcher.extensions.InstructionExtensions.addInstruction
 import app.revanced.patcher.extensions.InstructionExtensions.addInstructionsWithLabels
 import app.revanced.patcher.extensions.InstructionExtensions.getInstruction
 import app.revanced.patcher.fingerprint
@@ -43,29 +42,16 @@ private val transcriptUrlFingerprint = fingerprint {
     }
 }
 
-// Finds YouTube's main Activity onCreate — used to hook setActivity().
-// "PostCreateCalledKey" is a stable string present in WatchWhileActivity/MainActivity.onCreate.
-@Suppress("DEPRECATION")
-private val mainActivityOnCreateFingerprint = fingerprint {
-    returns("V")
-    parameters("Landroid/os/Bundle;")
-    strings("PostCreateCalledKey")
-    custom { method, _ ->
-        method.definingClass.endsWith("Activity;") && method.name == "onCreate"
-    }
-}
-
 @Suppress("unused", "DEPRECATION")
 val hebrewSubtitlesPatch: Patch = bytecodePatch(
     "Hebrew auto-translated subtitles",
-    "Automatically adds Hebrew as the translation language for video subtitles, with a player button to toggle.",
+    "Automatically adds Hebrew as the translation language for video subtitles.",
 ) {
     compatibleWith("com.google.android.youtube" to (null as Set<String>?))
 
     extendWith("hebrew-helper.dex")
 
     execute {
-        // ── URL interceptor ──────────────────────────────────────────────────────
         val urlClassDef = transcriptUrlFingerprint.classDefOrNull
             ?: throw PatchException("Could not find transcript URL method")
 
@@ -74,12 +60,9 @@ val hebrewSubtitlesPatch: Patch = bytecodePatch(
             val invoke = getInstruction<FiveRegisterInstruction>(urlIndex)
             val urlRegister = invoke.registerD
 
-            // tempReg: a free register not used by the invoke — reused for all temp work.
             val usedRegs = setOf(invoke.registerC, invoke.registerD, invoke.registerE, invoke.registerF)
             val tempReg = (0..15).first { it !in usedRegs }
 
-            // With the extension DEX, isEnabled(Context) is a 1-arg call.
-            // tempReg holds context → then bool result → then string args — no register expansion needed.
             addInstructionsWithLabels(
                 urlIndex,
                 """
@@ -102,16 +85,6 @@ val hebrewSubtitlesPatch: Patch = bytecodePatch(
                     const/4 v$tempReg, 0x0
                 """,
                 ExternalLabel("skip", getInstruction(urlIndex))
-            )
-        }
-
-        // ── Player button via Activity hook ──────────────────────────────────────
-        // p0 = "this" (the Activity). Inject at index 0 — before any existing code.
-        val activityClassDef = mainActivityOnCreateFingerprint.classDefOrNull
-        if (activityClassDef != null) {
-            mainActivityOnCreateFingerprint.match(activityClassDef).method.addInstruction(
-                0,
-                "invoke-static { p0 }, Lapp/revanced/extension/youtube/subtitle/HebrewSubtitlesHelper;->setActivity(Landroid/app/Activity;)V"
             )
         }
     }
