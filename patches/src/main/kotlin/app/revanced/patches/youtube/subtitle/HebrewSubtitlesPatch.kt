@@ -9,7 +9,6 @@ import app.revanced.patcher.patch.bytecodePatch
 import app.revanced.patcher.util.smali.ExternalLabel
 import com.android.tools.smali.dexlib2.AccessFlags
 import com.android.tools.smali.dexlib2.Opcode
-import com.android.tools.smali.dexlib2.builder.MutableMethodImplementation
 import com.android.tools.smali.dexlib2.iface.Method
 import com.android.tools.smali.dexlib2.iface.instruction.FiveRegisterInstruction
 import com.android.tools.smali.dexlib2.iface.instruction.ReferenceInstruction
@@ -69,22 +68,20 @@ val hebrewSubtitlesPatch: Patch = bytecodePatch(
             val invoke = getInstruction<FiveRegisterInstruction>(urlIndex)
             val urlRegister = invoke.registerD
 
+            // tempReg: a free register not used by the invoke — reused for all temp work.
             val usedRegs = setOf(invoke.registerC, invoke.registerD, invoke.registerE, invoke.registerF)
             val tempReg = (0..15).first { it !in usedRegs }
 
-            val mutableImpl = implementation as MutableMethodImplementation
-            val ctxReg = mutableImpl.registerCount
-            val boolReg = mutableImpl.registerCount + 1
-            mutableImpl.registerCount += 2
-
+            // With the extension DEX, isEnabled(Context) is a 1-arg call.
+            // tempReg holds context → then bool result → then string args — no register expansion needed.
             addInstructionsWithLabels(
                 urlIndex,
                 """
                     invoke-static { }, Landroid/app/ActivityThread;->currentApplication()Landroid/app/Application;
-                    move-result-object v$ctxReg
-                    invoke-static { v$ctxReg }, Lapp/revanced/extension/youtube/subtitle/HebrewSubtitlesHelper;->isEnabled(Landroid/content/Context;)Z
-                    move-result v$boolReg
-                    if-eqz v$boolReg, :skip
+                    move-result-object v$tempReg
+                    invoke-static { v$tempReg }, Lapp/revanced/extension/youtube/subtitle/HebrewSubtitlesHelper;->isEnabled(Landroid/content/Context;)Z
+                    move-result v$tempReg
+                    if-eqz v$tempReg, :skip
                     const-string v$tempReg, "timedtext"
                     invoke-virtual { v$urlRegister, v$tempReg }, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
                     move-result v$tempReg
@@ -106,24 +103,18 @@ val hebrewSubtitlesPatch: Patch = bytecodePatch(
         val btnClassDef = playerBottomControlsFingerprint.classDefOrNull
         if (btnClassDef != null) {
             playerBottomControlsFingerprint.match(btnClassDef).method.apply {
-                val mutableImpl = implementation as MutableMethodImplementation
-                val r0 = mutableImpl.registerCount
-                val r1 = mutableImpl.registerCount + 1
-                mutableImpl.registerCount += 2
-
-                // Inject at index 0: call HebrewSubtitlesHelper.initButton(activity)
-                // to add the toggle button to the player controls.
+                // Use v0 at the top of the method — a safe local register at method entry.
+                // We restore it to 0 before any original code runs.
                 addInstructionsWithLabels(
                     0,
                     """
                         invoke-static { }, Landroid/app/ActivityThread;->currentActivity()Landroid/app/Activity;
-                        move-result-object v$r0
-                        if-eqz v$r0, :no_activity
-                        invoke-static { v$r0 }, Lapp/revanced/extension/youtube/subtitle/HebrewSubtitlesHelper;->initButton(Landroid/app/Activity;)V
+                        move-result-object v0
+                        if-eqz v0, :no_activity
+                        invoke-static { v0 }, Lapp/revanced/extension/youtube/subtitle/HebrewSubtitlesHelper;->initButton(Landroid/app/Activity;)V
                         :no_activity
-                        const/4 v$r0, 0x0
-                    """,
-                    ExternalLabel("no_activity", getInstruction(0))
+                        const/4 v0, 0x0
+                    """
                 )
             }
         }
