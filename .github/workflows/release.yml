@@ -22,6 +22,48 @@ jobs:
           distribution: "zulu"
           java-version: "17"
 
+      - name: Compile Extension DEX
+        run: |
+          # Find Android SDK tools (ubuntu-latest has Android SDK pre-installed)
+          ANDROID_SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+
+          # Find latest available android.jar
+          ANDROID_JAR=$(find "$ANDROID_SDK/platforms" -name "android.jar" 2>/dev/null | sort -V | tail -1)
+          if [ -z "$ANDROID_JAR" ]; then
+            echo "android.jar not found, installing platform..."
+            yes | "$ANDROID_SDK/cmdline-tools/latest/bin/sdkmanager" "platforms;android-34" >/dev/null 2>&1 || true
+            ANDROID_JAR=$(find "$ANDROID_SDK/platforms" -name "android.jar" 2>/dev/null | sort -V | tail -1)
+          fi
+
+          # Find latest d8
+          D8=$(find "$ANDROID_SDK/build-tools" -name "d8" 2>/dev/null | sort -V | tail -1)
+          if [ -z "$D8" ]; then
+            echo "d8 not found, installing build-tools..."
+            yes | "$ANDROID_SDK/cmdline-tools/latest/bin/sdkmanager" "build-tools;34.0.0" >/dev/null 2>&1 || true
+            D8=$(find "$ANDROID_SDK/build-tools" -name "d8" 2>/dev/null | sort -V | tail -1)
+          fi
+
+          echo "Using android.jar: $ANDROID_JAR"
+          echo "Using d8: $D8"
+
+          mkdir -p extensions/out/classes patches/src/main/resources
+
+          # Compile Java → .class
+          javac -cp "$ANDROID_JAR" \
+            -source 8 -target 8 \
+            extensions/HebrewSubtitlesHelper.java \
+            -d extensions/out/classes
+
+          # Convert .class → DEX
+          "$D8" \
+            --min-api 26 \
+            --lib "$ANDROID_JAR" \
+            --output extensions/out/ \
+            $(find extensions/out/classes -name "*.class")
+
+          cp extensions/out/classes.dex patches/src/main/resources/hebrew-helper.dex
+          echo "Extension DEX compiled successfully: $(du -sh patches/src/main/resources/hebrew-helper.dex)"
+
       - name: Build
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -39,4 +81,3 @@ jobs:
           files: "patches/build/libs/*.rvp"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-

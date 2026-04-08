@@ -43,47 +43,48 @@ private val transcriptUrlFingerprint = fingerprint {
     }
 }
 
+// Fingerprint for the player bottom controls inflate — looks for ViewStub.inflate() calls
+// in a class that manages the bottom UI container.
+@Suppress("DEPRECATION")
+private val playerBottomControlsFingerprint = fingerprint {
+    strings("bottomUiContainerStub")
+}
+
 @Suppress("unused", "DEPRECATION")
 val hebrewSubtitlesPatch: Patch = bytecodePatch(
     "Hebrew auto-translated subtitles",
-    "Automatically adds Hebrew as the translation language for video subtitles.",
+    "Automatically adds Hebrew as the translation language for video subtitles, with a player button to toggle.",
 ) {
     compatibleWith("com.google.android.youtube" to (null as Set<String>?))
 
+    extendWith("hebrew-helper.dex")
+
     execute {
-        val classDef = transcriptUrlFingerprint.classDefOrNull
+        // ── URL interceptor ──────────────────────────────────────────────────────
+        val urlClassDef = transcriptUrlFingerprint.classDefOrNull
             ?: throw PatchException("Could not find transcript URL method")
 
-        transcriptUrlFingerprint.match(classDef).method.apply {
+        transcriptUrlFingerprint.match(urlClassDef).method.apply {
             val urlIndex = indexOfNewUrlRequestBuilderInstruction()
             val invoke = getInstruction<FiveRegisterInstruction>(urlIndex)
             val urlRegister = invoke.registerD
 
-            // tempReg: an existing free register (not used by the invoke instruction).
             val usedRegs = setOf(invoke.registerC, invoke.registerD, invoke.registerE, invoke.registerF)
             val tempReg = (0..15).first { it !in usedRegs }
 
-            // Expand the method's register table by 2 to get two brand-new,
-            // collision-free registers for the SharedPreferences 3-arg invokes.
             val mutableImpl = implementation as MutableMethodImplementation
-            val tempReg2 = mutableImpl.registerCount       // new register slot
-            val tempReg3 = mutableImpl.registerCount + 1   // new register slot
+            val ctxReg = mutableImpl.registerCount
+            val boolReg = mutableImpl.registerCount + 1
             mutableImpl.registerCount += 2
 
             addInstructionsWithLabels(
                 urlIndex,
                 """
                     invoke-static { }, Landroid/app/ActivityThread;->currentApplication()Landroid/app/Application;
-                    move-result-object v$tempReg2
-                    const-string v$tempReg3, "revanced_prefs"
-                    const/4 v$tempReg, 0x0
-                    invoke-virtual { v$tempReg2, v$tempReg3, v$tempReg }, Landroid/content/Context;->getSharedPreferences(Ljava/lang/String;I)Landroid/content/SharedPreferences;
-                    move-result-object v$tempReg2
-                    const-string v$tempReg3, "revanced_hebrew_subtitles_enabled"
-                    const/4 v$tempReg, 0x1
-                    invoke-interface { v$tempReg2, v$tempReg3, v$tempReg }, Landroid/content/SharedPreferences;->getBoolean(Ljava/lang/String;Z)Z
-                    move-result v$tempReg
-                    if-eqz v$tempReg, :skip
+                    move-result-object v$ctxReg
+                    invoke-static { v$ctxReg }, Lapp/revanced/extension/youtube/subtitle/HebrewSubtitlesHelper;->isEnabled(Landroid/content/Context;)Z
+                    move-result v$boolReg
+                    if-eqz v$boolReg, :skip
                     const-string v$tempReg, "timedtext"
                     invoke-virtual { v$urlRegister, v$tempReg }, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
                     move-result v$tempReg
@@ -100,5 +101,32 @@ val hebrewSubtitlesPatch: Patch = bytecodePatch(
                 ExternalLabel("skip", getInstruction(urlIndex))
             )
         }
+
+        // ── Player button ────────────────────────────────────────────────────────
+        val btnClassDef = playerBottomControlsFingerprint.classDefOrNull
+        if (btnClassDef != null) {
+            playerBottomControlsFingerprint.match(btnClassDef).method.apply {
+                val mutableImpl = implementation as MutableMethodImplementation
+                val r0 = mutableImpl.registerCount
+                val r1 = mutableImpl.registerCount + 1
+                mutableImpl.registerCount += 2
+
+                // Inject at index 0: call HebrewSubtitlesHelper.initButton(activity)
+                // to add the toggle button to the player controls.
+                addInstructionsWithLabels(
+                    0,
+                    """
+                        invoke-static { }, Landroid/app/ActivityThread;->currentActivity()Landroid/app/Activity;
+                        move-result-object v$r0
+                        if-eqz v$r0, :no_activity
+                        invoke-static { v$r0 }, Lapp/revanced/extension/youtube/subtitle/HebrewSubtitlesHelper;->initButton(Landroid/app/Activity;)V
+                        :no_activity
+                        const/4 v$r0, 0x0
+                    """,
+                    ExternalLabel("no_activity", getInstruction(0))
+                )
+            }
+        }
+        // If fingerprint not found, skip button silently — URL injection still works.
     }
 }
