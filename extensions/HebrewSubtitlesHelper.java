@@ -199,8 +199,9 @@ public final class HebrewSubtitlesHelper {
                         || lower.contains("caption") || lower.contains("subtitle")
                         || lower.contains("כתוביות") || lower.contains("off captions")
                         || lower.contains("english") || lower.contains("אנגלית")) {
-                    android.util.Log.d("HebrewSubsUI", "FOUND TEXT: \"" + text + "\"");
-                    android.util.Log.d("HebrewSubsUI", "  path=" + newPath);
+                    String foundMsg = "FOUND: \"" + text + "\" path=" + newPath;
+                    android.util.Log.d("HebrewSubsUI", foundMsg);
+                    appendLogFile(view.getContext(), foundMsg);
                     logParentChain(view);
                 }
             }
@@ -227,6 +228,20 @@ public final class HebrewSubtitlesHelper {
             i++;
         }
         android.util.Log.d("HebrewSubsUI", sb.toString());
+        appendLogFile(view.getContext(), sb.toString());
+    }
+
+    // ── File logging ──────────────────────────────────────────────────────────────
+
+    static void appendLogFile(Context ctx, String msg) {
+        try {
+            java.io.File dir = ctx.getExternalFilesDir(null);
+            if (dir == null) return;
+            java.io.File f = new java.io.File(dir, "hebrew_subs_ui.log");
+            java.io.FileWriter fw = new java.io.FileWriter(f, true);
+            fw.write(System.currentTimeMillis() + " " + msg + "\n");
+            fw.close();
+        } catch (Exception ignored) {}
     }
 
     public static void setVisibility(boolean visible, boolean animated) {
