@@ -16,8 +16,8 @@ import java.lang.ref.WeakReference;
 
 public final class HebrewSubtitlesHelper {
 
-    private static final String PREFS   = "revanced_prefs";
-    private static final String KEY_ON  = "revanced_hebrew_subtitles_enabled";
+    private static final String PREFS = "revanced_prefs";
+    private static final String KEY_ON = "revanced_hebrew_subtitles_enabled";
 
     private static WeakReference<View> btnRef = new WeakReference<>(null);
 
@@ -32,7 +32,7 @@ public final class HebrewSubtitlesHelper {
     public static boolean isEnabled(Context context) {
         try {
             return context.getSharedPreferences(PREFS, 0)
-                          .getBoolean(KEY_ON, true);
+                    .getBoolean(KEY_ON, true);
         } catch (Exception e) {
             return true;
         }
@@ -60,12 +60,14 @@ public final class HebrewSubtitlesHelper {
 
             // --- Build the toggle button ------------------------------------------
             TextView btn = new TextView(ctx);
-            btn.setText("\u05E2\u05D1"); // "עב" (aleph-bet = Hebrew initials)
+            btn.setText("\u05E2\u05D1"); // "עב" (Hebrew initials)
             btn.setTextColor(Color.WHITE);
             btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
             btn.setTypeface(null, Typeface.BOLD);
             btn.setGravity(Gravity.CENTER);
-            btn.setVisibility(View.GONE);
+            // Start VISIBLE so the user can see and tap it even if visibility hooks
+            // are not injected (fingerprint miss).
+            btn.setVisibility(View.VISIBLE);
             btn.setAlpha(isEnabled(ctx) ? 1.0f : 0.35f);
 
             GradientDrawable bg = new GradientDrawable();
@@ -77,19 +79,20 @@ public final class HebrewSubtitlesHelper {
             btn.setOnClickListener(v -> {
                 boolean nowOn = !isEnabled(ctx);
                 ctx.getSharedPreferences(PREFS, 0)
-                   .edit().putBoolean(KEY_ON, nowOn).apply();
+                        .edit().putBoolean(KEY_ON, nowOn).apply();
                 v.setAlpha(nowOn ? 1.0f : 0.35f);
                 android.widget.Toast.makeText(
                         ctx,
-                        nowOn ? "\u05DB\u05EA\u05D5\u05D1\u05D9\u05D5\u05EA \u05E2\u05D1\u05E8\u05D9\u05EA: \u05E4\u05E2\u05D9\u05DC"
-                              : "\u05DB\u05EA\u05D5\u05D1\u05D9\u05D5\u05EA \u05E2\u05D1\u05E8\u05D9\u05EA: \u05DB\u05D1\u05D5\u05D9",
+                        nowOn
+                                ? "\u05DB\u05EA\u05D5\u05D1\u05D9\u05D5\u05EA \u05E2\u05D1\u05E8\u05D9\u05EA: \u05E4\u05E2\u05D9\u05DC"
+                                : "\u05DB\u05EA\u05D5\u05D1\u05D9\u05D5\u05EA \u05E2\u05D1\u05E8\u05D9\u05EA: \u05DB\u05D1\u05D5\u05D9",
                         android.widget.Toast.LENGTH_SHORT).show();
             });
 
             // --- Attach to view hierarchy ----------------------------------------
-            int sizePx   = dp(ctx, 48);
-            int marginB  = dp(ctx, 80);
-            int marginR  = dp(ctx, 8);
+            int sizePx = dp(ctx, 48);
+            int marginB = dp(ctx, 80);
+            int marginR = dp(ctx, 8);
 
             // Walk up looking for a FrameLayout (player overlay is usually one).
             ViewGroup frameParent = findFrameLayout(controlsView);
@@ -97,15 +100,13 @@ public final class HebrewSubtitlesHelper {
             if (frameParent != null) {
                 FrameLayout.LayoutParams lp =
                         new FrameLayout.LayoutParams(sizePx, sizePx);
-                lp.gravity     = Gravity.BOTTOM | Gravity.END;
+                lp.gravity = Gravity.BOTTOM | Gravity.END;
                 lp.bottomMargin = marginB;
-                lp.rightMargin  = marginR;
+                lp.rightMargin = marginR;
                 btn.setLayoutParams(lp);
                 frameParent.addView(btn);
             } else {
                 // Fallback: add directly to the bottom-controls container.
-                // Without ConstraintLayout.LayoutParams the view lands at (0,0)
-                // of the container, which is still visible and tappable.
                 ViewGroup container = (controlsView instanceof ViewGroup)
                         ? (ViewGroup) controlsView
                         : (ViewGroup) controlsView.getParent();
@@ -120,7 +121,6 @@ public final class HebrewSubtitlesHelper {
     /**
      * Injection point 2 – player controls animated show/hide.
      * Mirrors PlayerControlButton.setVisibility(visible, animated).
-     * (Called with p1=visible, p2=animated from the overlay-visibility method.)
      */
     public static void setVisibility(boolean visible, boolean animated) {
         try {
@@ -140,7 +140,6 @@ public final class HebrewSubtitlesHelper {
 
     /**
      * Injection point 4 – hide immediately on touch / hide-controls event.
-     * (Injected just after the setTranslationY call in the MotionEvent handler.)
      */
     public static void setVisibilityNegatedImmediate() {
         try {
@@ -155,8 +154,6 @@ public final class HebrewSubtitlesHelper {
 
     /**
      * Walk up at most 6 levels looking for a FrameLayout.
-     * In YouTube's player the overlay is typically a FrameLayout that contains
-     * the bottom-controls ConstraintLayout as a child.
      */
     private static ViewGroup findFrameLayout(View from) {
         ViewGroup candidate = (from.getParent() instanceof ViewGroup)
