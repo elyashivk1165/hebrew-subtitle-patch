@@ -135,15 +135,18 @@ val hebrewSubtitlesPatch: Patch = bytecodePatch(
         transcriptUrlFingerprint.match(urlClassDef).method.apply {
             val urlIndex = indexOfNewUrlRequestBuilderInstruction()
             val invoke = getInstruction<FiveRegisterInstruction>(urlIndex)
-            val urlReg = invoke.registerD
+            val cronetReg   = invoke.registerC
+            val urlReg      = invoke.registerD
+            val callbackReg = invoke.registerE
+            val executorReg = invoke.registerF
 
-            val usedRegs = setOf(invoke.registerC, invoke.registerD,
-                invoke.registerE, invoke.registerF)
+            val usedRegs = setOf(cronetReg, urlReg, callbackReg, executorReg)
             val tempReg = (0..15).first { it !in usedRegs }
 
             addInstructionsWithLabels(
                 urlIndex,
                 """
+                invoke-static { v$cronetReg, v$urlReg, v$callbackReg, v$executorReg }, $HELPER->saveTimedtextRequest(Ljava/lang/Object;Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Object;)V
                 invoke-static { }, Landroid/app/ActivityThread;->currentApplication()Landroid/app/Application;
                 move-result-object v$tempReg
                 invoke-static { v$tempReg }, $HELPER->isEnabled(Landroid/content/Context;)Z
