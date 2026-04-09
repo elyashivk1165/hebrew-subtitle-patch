@@ -64,17 +64,53 @@ public final class HebrewSubtitlesHelper {
      * to load the new subtitle track without any seek.
      */
     private static void reloadSubtitles(Context ctx) {
+        // Lazy lookup: try to find the CC button if not already found
         View ccBtn = ccBtnRef.get();
+        if (ccBtn == null) {
+            View myBtn = btnRef.get();
+            if (myBtn != null) {
+                ccBtn = findCcButtonById(myBtn.getRootView(), ctx);
+                if (ccBtn != null) {
+                    ccBtnRef = new WeakReference<>(ccBtn);
+                    android.util.Log.d("HebrewSubs", "CC button found lazily: "
+                            + ccBtn.getClass().getSimpleName() + " id=0x"
+                            + Integer.toHexString(ccBtn.getId()));
+                }
+            }
+        }
         if (ccBtn != null) {
+            final View finalCcBtn = ccBtn;
             android.util.Log.d("HebrewSubs", "reloadSubtitles: toggling CC button off→on");
-            ccBtn.post(() -> {
-                ccBtn.performClick();
-                ccBtn.postDelayed(() -> ccBtn.performClick(), 200);
+            finalCcBtn.post(() -> {
+                finalCcBtn.performClick();
+                finalCcBtn.postDelayed(() -> finalCcBtn.performClick(), 250);
             });
         } else {
             android.util.Log.w("HebrewSubs", "reloadSubtitles: CC button not found, falling back to Cronet replay");
             reloadSubtitlesCronet(ctx);
         }
+    }
+
+    private static View findCcButtonById(View root, Context ctx) {
+        try {
+            // Primary: look up by YouTube's resource name
+            int resId = ctx.getResources().getIdentifier(
+                    "youtube_controls_overlay_subtitle_button", "id", ctx.getPackageName());
+            if (resId != 0) {
+                View v = root.findViewById(resId);
+                if (v != null) {
+                    android.util.Log.d("HebrewSubs", "CC button found by resource ID");
+                    return v;
+                }
+                android.util.Log.w("HebrewSubs", "resource ID found (0x" + Integer.toHexString(resId) + ") but view not in hierarchy");
+            } else {
+                android.util.Log.w("HebrewSubs", "youtube_controls_overlay_subtitle_button resource ID not found");
+            }
+        } catch (Exception e) {
+            android.util.Log.e("HebrewSubs", "findCcButtonById error: " + e);
+        }
+        // Fallback: search by content description
+        return searchCcButton(root, 0);
     }
 
     private static void reloadSubtitlesCronet(Context ctx) {
@@ -196,7 +232,6 @@ public final class HebrewSubtitlesHelper {
             }
 
             btnRef = new WeakReference<>(btn);
-            findAndSaveCcButton(controlsView.getRootView());
             startCcPanelProbe(controlsView.getRootView());
         } catch (Exception ignored) {}
     }
