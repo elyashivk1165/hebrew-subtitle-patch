@@ -20,6 +20,7 @@ public final class HebrewSubtitlesHelper {
     private static final String KEY_ON = "revanced_hebrew_subtitles_enabled";
 
     private static WeakReference<View> btnRef = new WeakReference<>(null);
+    private static WeakReference<View> ccBtnRef = new WeakReference<>(null);
 
     // Saved timedtext request components for in-video reload
     private static Object savedEngine;
@@ -63,38 +64,72 @@ public final class HebrewSubtitlesHelper {
      * to load the new subtitle track without any seek.
      */
     private static void reloadSubtitles(Context ctx) {
+        View ccBtn = ccBtnRef.get();
+        if (ccBtn != null) {
+            android.util.Log.d("HebrewSubs", "reloadSubtitles: toggling CC button off→on");
+            ccBtn.post(() -> {
+                ccBtn.performClick();
+                ccBtn.postDelayed(() -> ccBtn.performClick(), 200);
+            });
+        } else {
+            android.util.Log.w("HebrewSubs", "reloadSubtitles: CC button not found, falling back to Cronet replay");
+            reloadSubtitlesCronet(ctx);
+        }
+    }
+
+    private static void reloadSubtitlesCronet(Context ctx) {
         try {
             if (savedEngine == null || savedBaseUrl == null
-                    || savedCallback == null || savedExecutor == null) {
-                android.util.Log.d("HebrewSubs", "reloadSubtitles: no saved state");
-                return;
-            }
-
+                    || savedCallback == null || savedExecutor == null) return;
             String newUrl = savedBaseUrl + (isEnabled(ctx) ? "&tlang=iw" : "");
-            android.util.Log.d("HebrewSubs", "reloadSubtitles: firing " + newUrl);
-
-            // Locate CronetEngine.newUrlRequestBuilder(String, Callback, Executor)
             Method newUrlRequestBuilder = null;
             for (Method m : savedEngine.getClass().getMethods()) {
-                if ("newUrlRequestBuilder".equals(m.getName())
-                        && m.getParameterCount() == 3) {
-                    newUrlRequestBuilder = m;
-                    break;
+                if ("newUrlRequestBuilder".equals(m.getName()) && m.getParameterCount() == 3) {
+                    newUrlRequestBuilder = m; break;
                 }
             }
-            if (newUrlRequestBuilder == null) {
-                android.util.Log.e("HebrewSubs", "reloadSubtitles: newUrlRequestBuilder not found");
-                return;
-            }
-
+            if (newUrlRequestBuilder == null) return;
             Object builder = newUrlRequestBuilder.invoke(savedEngine, newUrl, savedCallback, savedExecutor);
             Object request = builder.getClass().getMethod("build").invoke(builder);
             request.getClass().getMethod("start").invoke(request);
-
-            android.util.Log.d("HebrewSubs", "reloadSubtitles: request started");
         } catch (Exception e) {
-            android.util.Log.e("HebrewSubs", "reloadSubtitles failed: " + e);
+            android.util.Log.e("HebrewSubs", "reloadSubtitlesCronet failed: " + e);
         }
+    }
+
+    private static void findAndSaveCcButton(View root) {
+        try {
+            View found = searchCcButton(root, 0);
+            if (found != null) {
+                ccBtnRef = new WeakReference<>(found);
+                android.util.Log.d("HebrewSubs", "CC button found: "
+                        + found.getClass().getSimpleName()
+                        + " desc=" + found.getContentDescription());
+            } else {
+                android.util.Log.w("HebrewSubs", "CC button not found in hierarchy");
+            }
+        } catch (Exception e) {
+            android.util.Log.e("HebrewSubs", "findAndSaveCcButton failed: " + e);
+        }
+    }
+
+    private static View searchCcButton(View view, int depth) {
+        if (depth > 15 || view == null) return null;
+        CharSequence desc = view.getContentDescription();
+        if (desc != null) {
+            String d = desc.toString().toLowerCase();
+            if (d.contains("caption") || d.contains("subtitle") || d.contains("כתוביות")) {
+                return view;
+            }
+        }
+        if (view instanceof ViewGroup) {
+            ViewGroup vg = (ViewGroup) view;
+            for (int i = 0; i < vg.getChildCount(); i++) {
+                View found = searchCcButton(vg.getChildAt(i), depth + 1);
+                if (found != null) return found;
+            }
+        }
+        return null;
     }
 
     // ── Player-button hooks ──────────────────────────────────────────────────────
@@ -161,6 +196,7 @@ public final class HebrewSubtitlesHelper {
             }
 
             btnRef = new WeakReference<>(btn);
+            findAndSaveCcButton(controlsView.getRootView());
             startCcPanelProbe(controlsView.getRootView());
         } catch (Exception ignored) {}
     }
