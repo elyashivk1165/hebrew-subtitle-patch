@@ -81,6 +81,15 @@ public final class HebrewSubtitlesHelper {
                 ctx.getSharedPreferences(PREFS, 0)
                         .edit().putBoolean(KEY_ON, nowOn).apply();
                 v.setAlpha(nowOn ? 1.0f : 0.35f);
+                // Force subtitle reload by seeking to current position.
+                // This triggers a new timedtext request so the URL interceptor
+                // can immediately add (or not add) &tlang=iw.
+                try {
+                    Class<?> vi = Class.forName(
+                            "app.revanced.extension.youtube.video.VideoInformation");
+                    long pos = (long) vi.getMethod("getVideoTime").invoke(null);
+                    vi.getMethod("seekTo", long.class).invoke(null, pos);
+                } catch (Exception ignored) { }
                 android.widget.Toast.makeText(
                         ctx,
                         nowOn
