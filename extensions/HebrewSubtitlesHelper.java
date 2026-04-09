@@ -161,7 +161,72 @@ public final class HebrewSubtitlesHelper {
             }
 
             btnRef = new WeakReference<>(btn);
+            startCcPanelProbe(controlsView.getRootView());
         } catch (Exception ignored) {}
+    }
+
+    // ── CC Panel Probe ────────────────────────────────────────────────────────────
+
+    private static boolean probeRegistered = false;
+
+    private static void startCcPanelProbe(View rootView) {
+        if (probeRegistered) return;
+        probeRegistered = true;
+        try {
+            android.view.ViewTreeObserver vto = rootView.getViewTreeObserver();
+            if (!vto.isAlive()) return;
+            vto.addOnGlobalLayoutListener(() -> {
+                try {
+                    scanForCcPanel(rootView, 0, new StringBuilder());
+                } catch (Exception ignored) {}
+            });
+            android.util.Log.d("HebrewSubsUI", "CC probe registered on " + rootView.getClass().getSimpleName());
+        } catch (Exception e) {
+            android.util.Log.e("HebrewSubsUI", "startCcPanelProbe failed: " + e);
+        }
+    }
+
+    private static void scanForCcPanel(View view, int depth, StringBuilder path) {
+        if (depth > 12) return;
+        String className = view.getClass().getSimpleName();
+        String newPath = path + "/" + className;
+
+        if (view instanceof android.widget.TextView) {
+            String text = ((android.widget.TextView) view).getText().toString().trim();
+            if (!text.isEmpty()) {
+                String lower = text.toLowerCase();
+                if (lower.contains("auto-translat") || lower.contains("תרגום")
+                        || lower.contains("caption") || lower.contains("subtitle")
+                        || lower.contains("כתוביות") || lower.contains("off captions")
+                        || lower.contains("english") || lower.contains("אנגלית")) {
+                    android.util.Log.d("HebrewSubsUI", "FOUND TEXT: \"" + text + "\"");
+                    android.util.Log.d("HebrewSubsUI", "  path=" + newPath);
+                    logParentChain(view);
+                }
+            }
+        }
+
+        if (view instanceof ViewGroup) {
+            ViewGroup vg = (ViewGroup) view;
+            for (int i = 0; i < vg.getChildCount(); i++) {
+                scanForCcPanel(vg.getChildAt(i), depth + 1, new StringBuilder(newPath));
+            }
+        }
+    }
+
+    private static void logParentChain(View view) {
+        StringBuilder sb = new StringBuilder("  parents: ");
+        android.view.ViewParent p = view.getParent();
+        int i = 0;
+        while (p instanceof View && i < 8) {
+            View pv = (View) p;
+            sb.append(pv.getClass().getSimpleName());
+            if (p instanceof ViewGroup) sb.append("[").append(((ViewGroup) p).getChildCount()).append("]");
+            sb.append(" < ");
+            p = pv.getParent();
+            i++;
+        }
+        android.util.Log.d("HebrewSubsUI", sb.toString());
     }
 
     public static void setVisibility(boolean visible, boolean animated) {
