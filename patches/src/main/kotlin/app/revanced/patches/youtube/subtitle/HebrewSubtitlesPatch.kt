@@ -29,7 +29,7 @@ private fun Method.findInstructionIndex(
 private fun Method.indexOfNewUrlRequestBuilderInstruction() =
     findInstructionIndex { instr ->
         instr.opcode == Opcode.INVOKE_VIRTUAL &&
-            (instr as? ReferenceInstruction)?.reference?.toString() ==
+        (instr as? ReferenceInstruction)?.reference?.toString() ==
             "Lorg/chromium/net/CronetEngine;->newUrlRequestBuilder(" +
             "Ljava/lang/String;" +
             "Lorg/chromium/net/UrlRequest\$Callback;" +
@@ -40,37 +40,28 @@ private fun Method.indexOfNewUrlRequestBuilderInstruction() =
 private fun Method.indexOfBuildInstruction() =
     findInstructionIndex { instr ->
         instr.opcode == Opcode.INVOKE_VIRTUAL &&
-            (instr as? ReferenceInstruction)?.reference?.toString() ==
+        (instr as? ReferenceInstruction)?.reference?.toString() ==
             "Lorg/chromium/net/UrlRequest\$Builder;->build()Lorg/chromium/net/UrlRequest;"
     }
 
-/**
- * Returns the index of the first INVOKE_VIRTUAL that calls ViewStub.inflate().
- * This is used in two fingerprints: bottom-controls inflate and top-controls inflate.
- */
 private fun Method.indexOfViewStubInflate() =
     findInstructionIndex { instr ->
         instr.opcode == Opcode.INVOKE_VIRTUAL &&
-            (instr as? ReferenceInstruction)?.reference?.toString() ==
+        (instr as? ReferenceInstruction)?.reference?.toString() ==
             "Landroid/view/ViewStub;->inflate()Landroid/view/View;"
     }
 
-/**
- * Returns the index of the first INVOKE_VIRTUAL that calls setTranslationY on any object.
- * Used to locate the insertion point for setVisibilityNegatedImmediate.
- */
 private fun Method.indexOfSetTranslationY() =
     findInstructionIndex { instr ->
         instr.opcode == Opcode.INVOKE_VIRTUAL &&
-            (instr as? ReferenceInstruction)?.reference?.toString()
-                ?.contains("setTranslationY") == true
+        (instr as? ReferenceInstruction)?.reference?.toString()
+            ?.contains("setTranslationY") == true
     }
 
 // ── Fingerprints ──────────────────────────────────────────────────────────────
 
 /**
  * Fingerprint for the CronetEngine.newUrlRequestBuilder call site.
- * This is the method where we intercept the timedtext URL and append &tlang=iw.
  */
 @Suppress("DEPRECATION")
 private val transcriptUrlFingerprint = fingerprint {
@@ -78,44 +69,24 @@ private val transcriptUrlFingerprint = fingerprint {
     returns("L")
     custom { method, _ ->
         method.indexOfNewUrlRequestBuilderInstruction() >= 0 &&
-            method.indexOfBuildInstruction() >= 0
-    }
-}
-
-/**
- * Fingerprint for the method that inflates youtube_controls_bottom_ui_container via ViewStub.
- *
- * Distinguishing characteristics (verified against RVX source):
- *   - Returns Ljava/lang/Object;  (the inflated View is returned as Object, not void)
- *   - No parameters
- *   - Contains a call to ViewStub.inflate()
- *
- * The top-controls inflate method also calls ViewStub.inflate() but returns void — so
- * the return-type constraint uniquely identifies the bottom-controls one.
- */
-@Suppress("DEPRECATION")
-private val playerBottomControlsInflateFingerprint = fingerprint {
-    returns("Ljava/lang/Object;")
-    custom { method, _ ->
-        method.parameterTypes.isEmpty() &&
-            method.indexOfViewStubInflate() >= 0
+        method.indexOfBuildInstruction() >= 0
     }
 }
 
 /**
  * Fingerprint for the player controls overlay animated-visibility method.
  *
- * Distinguishing characteristics (from RVX controlsOverlayVisibilityFingerprint):
- *   - PRIVATE FINAL
- *   - Returns void
- *   - Exactly two boolean parameters (visible: Z, animated: Z)
- *   - Non-trivial body (> 10 instructions) — rules out tiny stubs
- *   - Its class also contains a no-arg method that calls ViewStub.inflate()
- *     (i.e. the top-controls inflate method is in the same class)
+ * Identifying characteristics:
+ * - PRIVATE + FINAL
+ * - Returns void
+ * - Exactly two boolean parameters (visible: Z, animated: Z)
+ * - Non-trivial body (> 10 instructions)
+ * - Its class also contains a no-param method that calls ViewStub.inflate()
+ *   (the bottom-controls inflate method lives in the same class)
  *
- * The last constraint is the key one: the player-controls overlay class manages
- * both top-control inflation and visibility transitions, so requiring that the
- * class also contains a ViewStub.inflate() call uniquely pins us to that class.
+ * This single fingerprint is the anchor for ALL button injections:
+ * the inflate method is found by searching within the matched class,
+ * and the motion-event method is also searched within the same class.
  */
 @Suppress("DEPRECATION")
 private val controlsOverlayVisibilityFingerprint = fingerprint {
@@ -124,18 +95,16 @@ private val controlsOverlayVisibilityFingerprint = fingerprint {
     parameters("Z", "Z")
     custom { method, classDef ->
         (method.implementation?.instructions?.count() ?: 0) > 10 &&
-            classDef.methods.any { m ->
-                m.parameterTypes.isEmpty() &&
-                    m.indexOfViewStubInflate() >= 0
-            }
+        classDef.methods.any { m ->
+            m.parameterTypes.isEmpty() &&
+            m.indexOfViewStubInflate() >= 0
+        }
     }
 }
 
 /**
  * Fingerprint for the MotionEvent handler that calls setTranslationY.
- * This is the method where player controls hide on a touch event.
- * We search for it within the same class as controlsOverlayVisibilityFingerprint
- * (the player controls overlay class) to avoid false positives.
+ * Searched within the same class as controlsOverlayVisibilityFingerprint.
  */
 @Suppress("DEPRECATION")
 private val motionEventFingerprint = fingerprint {
@@ -160,72 +129,68 @@ val hebrewSubtitlesPatch: Patch = bytecodePatch(
     execute {
 
         // ── Injection 0: URL interceptor ─────────────────────────────────────────
-        //
-        // Before CronetEngine.newUrlRequestBuilder(url, …) is called we:
-        //   1. Ask HebrewSubtitlesHelper.isEnabled(context) — reads SharedPreferences.
-        //   2. Check the URL contains "timedtext" (subtitle request).
-        //   3. Check the URL does NOT already contain "tlang=" (user picked a language).
-        //   4. If all pass: append "&tlang=iw" to force Hebrew auto-translation.
-        //
-        // Register strategy:
-        //   - urlRegister  : the register that holds the URL string (invoke arg D).
-        //   - tempReg      : a free register not clobbered by the invoke (chosen from 0–15).
-        //     All SharedPreferences work reuses tempReg sequentially — no register expansion
-        //     needed because isEnabled(Context) takes only 1 arg.
-        //
         val urlClassDef = transcriptUrlFingerprint.classDefOrNull
             ?: throw PatchException("Could not find CronetEngine.newUrlRequestBuilder call site")
 
         transcriptUrlFingerprint.match(urlClassDef).method.apply {
             val urlIndex = indexOfNewUrlRequestBuilderInstruction()
-            val invoke   = getInstruction<FiveRegisterInstruction>(urlIndex)
-            val urlReg   = invoke.registerD
+            val invoke = getInstruction<FiveRegisterInstruction>(urlIndex)
+            val urlReg = invoke.registerD
 
-            // Pick any register not used by the 5-register invoke (C, D, E, F, G).
             val usedRegs = setOf(invoke.registerC, invoke.registerD,
-                                 invoke.registerE, invoke.registerF)
-            val tempReg  = (0..15).first { it !in usedRegs }
+                invoke.registerE, invoke.registerF)
+            val tempReg = (0..15).first { it !in usedRegs }
 
             addInstructionsWithLabels(
                 urlIndex,
                 """
-                    invoke-static { }, Landroid/app/ActivityThread;->currentApplication()Landroid/app/Application;
-                    move-result-object v$tempReg
-                    invoke-static { v$tempReg }, $HELPER->isEnabled(Landroid/content/Context;)Z
-                    move-result v$tempReg
-                    if-eqz v$tempReg, :skip
-                    const-string v$tempReg, "timedtext"
-                    invoke-virtual { v$urlReg, v$tempReg }, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
-                    move-result v$tempReg
-                    if-eqz v$tempReg, :skip
-                    const-string v$tempReg, "tlang="
-                    invoke-virtual { v$urlReg, v$tempReg }, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
-                    move-result v$tempReg
-                    if-nez v$tempReg, :skip
-                    const-string v$tempReg, "&tlang=iw"
-                    invoke-virtual { v$urlReg, v$tempReg }, Ljava/lang/String;->concat(Ljava/lang/String;)Ljava/lang/String;
-                    move-result-object v$urlReg
-                    const/4 v$tempReg, 0x0
+                invoke-static { }, Landroid/app/ActivityThread;->currentApplication()Landroid/app/Application;
+                move-result-object v$tempReg
+                invoke-static { v$tempReg }, $HELPER->isEnabled(Landroid/content/Context;)Z
+                move-result v$tempReg
+                if-eqz v$tempReg, :skip
+                const-string v$tempReg, "timedtext"
+                invoke-virtual { v$urlReg, v$tempReg }, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
+                move-result v$tempReg
+                if-eqz v$tempReg, :skip
+                const-string v$tempReg, "tlang="
+                invoke-virtual { v$urlReg, v$tempReg }, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
+                move-result v$tempReg
+                if-nez v$tempReg, :skip
+                const-string v$tempReg, "&tlang=iw"
+                invoke-virtual { v$urlReg, v$tempReg }, Ljava/lang/String;->concat(Ljava/lang/String;)Ljava/lang/String;
+                move-result-object v$urlReg
+                const/4 v$tempReg, 0x0
                 """,
                 ExternalLabel("skip", getInstruction(urlIndex)),
             )
         }
 
-        // ── Injection 1: initializeButton ────────────────────────────────────────
+        // ── Button injections — all anchored to controlsOverlayVisibilityFingerprint ──
         //
-        // After ViewStub.inflate() returns the bottom-controls container (an Object),
-        // we pass that View to HebrewSubtitlesHelper.initializeButton().
-        // The Java code walks the hierarchy to find a FrameLayout parent, creates a
-        // TextView toggle, and attaches it with Gravity.BOTTOM|END.
+        // This single fingerprint identifies the player-controls overlay class.
+        // From that class we extract:
+        //   1. The no-param / returns-Object inflate method  → initializeButton
+        //   2. The private-final void(Z,Z) visibility method → setVisibility
+        //   3. The void(MotionEvent) motion handler           → setVisibilityNegatedImmediate
         //
-        val bottomClassDef = playerBottomControlsInflateFingerprint.classDefOrNull
-        if (bottomClassDef != null) {
-            playerBottomControlsInflateFingerprint.match(bottomClassDef).method.apply {
-                val inflateIdx = indexOfViewStubInflate()
-                if (inflateIdx >= 0) {
-                    // inflateIdx     : invoke-virtual vX, Landroid/view/ViewStub;->inflate()
-                    // inflateIdx + 1 : move-result-object vN   ← vN = inflated View
-                    // inflateIdx + 2 : ← our injection point
+        val visibilityClassDef = controlsOverlayVisibilityFingerprint.classDefOrNull
+        if (visibilityClassDef != null) {
+
+            // ── Injection 1: initializeButton ─────────────────────────────────────
+            //
+            // Find the inflate method within this class (no params, calls ViewStub.inflate()).
+            // It is the bottom-controls container inflate method.
+            val inflateMethod = visibilityClassDef.methods.firstOrNull { m ->
+                m.parameterTypes.isEmpty() &&
+                m.indexOfViewStubInflate() >= 0
+            }
+            if (inflateMethod != null) {
+                inflateMethod.apply {
+                    val inflateIdx = indexOfViewStubInflate()
+                    // inflateIdx+0 : invoke-virtual ..ViewStub..inflate()
+                    // inflateIdx+1 : move-result-object vN  ← vN = inflated View
+                    // inflateIdx+2 : ← our injection point (before whatever uses vN)
                     val inflatedReg =
                         getInstruction<OneRegisterInstruction>(inflateIdx + 1).registerA
                     addInstruction(
@@ -234,20 +199,11 @@ val hebrewSubtitlesPatch: Patch = bytecodePatch(
                     )
                 }
             }
-        }
 
-        // ── Injections 2 & 4: visibility callbacks ───────────────────────────────
-        //
-        // We resolve both within the player-controls overlay class
-        // (the class that controlsOverlayVisibilityFingerprint matched).
-        // Searching within the same class avoids false positives.
-        //
-        val visibilityClassDef = controlsOverlayVisibilityFingerprint.classDefOrNull
-        if (visibilityClassDef != null) {
-
-            // Injection 2: setVisibility(visible, animated)
-            // Inserted at index 0 of the private final void(Z,Z) method.
-            // p1 = visible (boolean), p2 = animated (boolean).
+            // ── Injection 2: setVisibility(visible, animated) ─────────────────────
+            //
+            // Injected at index 0 of the private final void(Z,Z) method.
+            // p1 = visible (Z), p2 = animated (Z).
             controlsOverlayVisibilityFingerprint.match(visibilityClassDef).method.apply {
                 addInstruction(
                     0,
@@ -255,7 +211,8 @@ val hebrewSubtitlesPatch: Patch = bytecodePatch(
                 )
             }
 
-            // Injection 4: setVisibilityNegatedImmediate()
+            // ── Injection 4: setVisibilityNegatedImmediate ────────────────────────
+            //
             // The MotionEvent handler calls setTranslationY when hiding controls on touch.
             // We insert our call immediately after that setTranslationY call.
             try {
@@ -270,7 +227,6 @@ val hebrewSubtitlesPatch: Patch = bytecodePatch(
                 }
             } catch (_: Exception) {
                 // MotionEvent method not found in this class — injection 4 is skipped.
-                // Button will remain visible after controls hide, but won't crash.
             }
         }
     }
