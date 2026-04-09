@@ -1,7 +1,6 @@
 package app.revanced.extension.youtube.subtitle;
 
 import android.content.Context;
-import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -13,6 +12,7 @@ import android.widget.FrameLayout;
 import android.widget.TextView;
 
 import java.lang.ref.WeakReference;
+import java.lang.reflect.Method;
 
 public final class HebrewSubtitlesHelper {
 
@@ -21,14 +21,14 @@ public final class HebrewSubtitlesHelper {
 
     private static WeakReference<View> btnRef = new WeakReference<>(null);
 
-    // ── URL interceptor hook ────────────────────────────────────────────────────
+    // Saved timedtext request components for in-video reload
+    private static Object savedEngine;
+    private static String savedBaseUrl;   // base URL WITHOUT &tlang=iw
+    private static Object savedCallback;
+    private static Object savedExecutor;
 
-    /**
-     * Injection point 0 – called by the URL interceptor before every
-     * CronetEngine.newUrlRequestBuilder() call.
-     * Returns true  → inject &tlang=iw
-     * Returns false → leave URL untouched
-     */
+    // ── URL interceptor hooks ───────────────────────────────────────────────────
+
     public static boolean isEnabled(Context context) {
         try {
             return context.getSharedPreferences(PREFS, 0)
@@ -38,35 +38,82 @@ public final class HebrewSubtitlesHelper {
         }
     }
 
-    // ── Player-button hooks (called from Smali injection points) ────────────────
+    /**
+     * Called from the URL interceptor BEFORE &tlang=iw is injected.
+     * Saves the CronetEngine, base URL, callback, and executor so we can
+     * replay the request when the toggle button is tapped.
+     */
+    public static void saveTimedtextRequest(Object engine, String url,
+                                             Object callback, Object executor) {
+        try {
+            if (url != null && url.contains("timedtext")) {
+                savedEngine   = engine;
+                // Strip any existing tlang= to get the canonical base URL
+                savedBaseUrl  = url.replaceAll("[&?]tlang=[^&]*", "");
+                savedCallback = callback;
+                savedExecutor = executor;
+                android.util.Log.d("HebrewSubs", "saveTimedtextRequest: saved " + savedBaseUrl);
+            }
+        } catch (Exception ignored) {}
+    }
 
     /**
-     * Injection point 1 – called right after ViewStub.inflate() returns
-     * the youtube_controls_bottom_ui_container ConstraintLayout.
-     *
-     * We walk up the view hierarchy to find a FrameLayout parent so we can
-     * use Gravity.BOTTOM|END for clean positioning without needing
-     * ConstraintLayout.LayoutParams (which lives in a separate library).
+     * Re-fires the last timedtext request with or without &tlang=iw
+     * depending on the current preference, causing YouTube's own callback
+     * to load the new subtitle track without any seek.
      */
+    private static void reloadSubtitles(Context ctx) {
+        try {
+            if (savedEngine == null || savedBaseUrl == null
+                    || savedCallback == null || savedExecutor == null) {
+                android.util.Log.d("HebrewSubs", "reloadSubtitles: no saved state");
+                return;
+            }
+
+            String newUrl = savedBaseUrl + (isEnabled(ctx) ? "&tlang=iw" : "");
+            android.util.Log.d("HebrewSubs", "reloadSubtitles: firing " + newUrl);
+
+            // Locate CronetEngine.newUrlRequestBuilder(String, Callback, Executor)
+            Method newUrlRequestBuilder = null;
+            for (Method m : savedEngine.getClass().getMethods()) {
+                if ("newUrlRequestBuilder".equals(m.getName())
+                        && m.getParameterCount() == 3) {
+                    newUrlRequestBuilder = m;
+                    break;
+                }
+            }
+            if (newUrlRequestBuilder == null) {
+                android.util.Log.e("HebrewSubs", "reloadSubtitles: newUrlRequestBuilder not found");
+                return;
+            }
+
+            Object builder = newUrlRequestBuilder.invoke(savedEngine, newUrl, savedCallback, savedExecutor);
+            Object request = builder.getClass().getMethod("build").invoke(builder);
+            request.getClass().getMethod("start").invoke(request);
+
+            android.util.Log.d("HebrewSubs", "reloadSubtitles: request started");
+        } catch (Exception e) {
+            android.util.Log.e("HebrewSubs", "reloadSubtitles failed: " + e);
+        }
+    }
+
+    // ── Player-button hooks ──────────────────────────────────────────────────────
+
     public static void initializeButton(View controlsView) {
         try {
             Context ctx = controlsView.getContext();
 
-            // Remove stale button from a previous player session.
             View old = btnRef.get();
             if (old != null && old.getParent() instanceof ViewGroup) {
                 ((ViewGroup) old.getParent()).removeView(old);
             }
 
-            // --- Build the toggle button ------------------------------------------
             TextView btn = new TextView(ctx);
-            btn.setText("\u05E2\u05D1"); // "עב" (Hebrew initials)
+            btn.setText("\u05E2\u05D1");
             btn.setTextColor(Color.WHITE);
             btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
             btn.setTypeface(null, Typeface.BOLD);
             btn.setGravity(Gravity.CENTER);
-            // Start VISIBLE so the user can see and tap it even if visibility hooks
-            // are not injected (fingerprint miss).
             btn.setVisibility(View.VISIBLE);
             btn.setAlpha(isEnabled(ctx) ? 1.0f : 0.35f);
 
@@ -81,15 +128,8 @@ public final class HebrewSubtitlesHelper {
                 ctx.getSharedPreferences(PREFS, 0)
                         .edit().putBoolean(KEY_ON, nowOn).apply();
                 v.setAlpha(nowOn ? 1.0f : 0.35f);
-                // Force subtitle reload by seeking to current position.
-                // This triggers a new timedtext request so the URL interceptor
-                // can immediately add (or not add) &tlang=iw.
-                try {
-                    Class<?> vi = Class.forName(
-                            "app.revanced.extension.youtube.video.VideoInformation");
-                    long pos = (long) vi.getMethod("getVideoTime").invoke(null);
-                    vi.getMethod("seekTo", long.class).invoke(null, pos);
-                } catch (Exception ignored) { }
+                // Reload subtitle track immediately using saved Cronet components
+                reloadSubtitles(ctx);
                 android.widget.Toast.makeText(
                         ctx,
                         nowOn
@@ -98,12 +138,10 @@ public final class HebrewSubtitlesHelper {
                         android.widget.Toast.LENGTH_SHORT).show();
             });
 
-            // --- Attach to view hierarchy ----------------------------------------
             int sizePx = dp(ctx, 48);
             int marginB = dp(ctx, 80);
             int marginR = dp(ctx, 8);
 
-            // Walk up looking for a FrameLayout (player overlay is usually one).
             ViewGroup frameParent = findFrameLayout(controlsView);
 
             if (frameParent != null) {
@@ -111,11 +149,10 @@ public final class HebrewSubtitlesHelper {
                         new FrameLayout.LayoutParams(sizePx, sizePx);
                 lp.gravity = Gravity.BOTTOM | Gravity.END;
                 lp.bottomMargin = marginB;
-                lp.rightMargin = marginR;
+                lp.rightMargin  = marginR;
                 btn.setLayoutParams(lp);
                 frameParent.addView(btn);
             } else {
-                // Fallback: add directly to the bottom-controls container.
                 ViewGroup container = (controlsView instanceof ViewGroup)
                         ? (ViewGroup) controlsView
                         : (ViewGroup) controlsView.getParent();
@@ -124,46 +161,29 @@ public final class HebrewSubtitlesHelper {
             }
 
             btnRef = new WeakReference<>(btn);
-        } catch (Exception ignored) { /* never crash YouTube */ }
+        } catch (Exception ignored) {}
     }
 
-    /**
-     * Injection point 2 – player controls animated show/hide.
-     * Mirrors PlayerControlButton.setVisibility(visible, animated).
-     */
     public static void setVisibility(boolean visible, boolean animated) {
         try {
             View btn = btnRef.get();
-            if (btn != null) {
-                btn.setVisibility(visible ? View.VISIBLE : View.GONE);
-            }
-        } catch (Exception ignored) { }
+            if (btn != null) btn.setVisibility(visible ? View.VISIBLE : View.GONE);
+        } catch (Exception ignored) {}
     }
 
-    /**
-     * Injection point 3 – immediate show/hide (no animation).
-     */
     public static void setVisibilityImmediate(boolean visible) {
         setVisibility(visible, false);
     }
 
-    /**
-     * Injection point 4 – hide immediately on touch / hide-controls event.
-     */
     public static void setVisibilityNegatedImmediate() {
         try {
             View btn = btnRef.get();
-            if (btn != null) {
-                btn.setVisibility(View.GONE);
-            }
-        } catch (Exception ignored) { }
+            if (btn != null) btn.setVisibility(View.GONE);
+        } catch (Exception ignored) {}
     }
 
-    // ── Helpers ─────────────────────────────────────────────────────────────────
+    // ── Helpers ──────────────────────────────────────────────────────────────────
 
-    /**
-     * Walk up at most 6 levels looking for a FrameLayout.
-     */
     private static ViewGroup findFrameLayout(View from) {
         ViewGroup candidate = (from.getParent() instanceof ViewGroup)
                 ? (ViewGroup) from.getParent() : null;
