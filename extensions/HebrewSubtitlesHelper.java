@@ -17,30 +17,27 @@ import java.util.List;
 
 public final class HebrewSubtitlesHelper {
 
-    private static final String PREFS = "revanced_prefs";
-    private static final String KEY_ON  = "revanced_hebrew_subtitles_enabled";
-
-    // WeakRef to the oju (SubtitleMenuBottomSheetFragment) instance for reflection-based track selection
+    // WeakRef to the oju (SubtitleMenuBottomSheetFragment) instance
     private static WeakReference<Object> ojuRef = new WeakReference<>(null);
 
-    // Saved timedtext request components (for Cronet fallback)
+    // Saved timedtext request components for Cronet fallback
     private static Object savedEngine;
     private static String savedBaseUrl;
     private static Object savedCallback;
     private static Object savedExecutor;
 
-    // ── Preference ───────────────────────────────────────────────────────────
+    // ── URL interceptor (save-only) ───────────────────────────────────────────
 
-    public static boolean isEnabled(Context context) {
-        try {
-            return context.getSharedPreferences(PREFS, 0).getBoolean(KEY_ON, true);
-        } catch (Exception e) {
-            return true;
-        }
-    }
-
-    // ── URL interceptor ───────────────────────────────────────────────────────
-
+    /**
+     * Called from bytecode hook at CronetEngine.newUrlRequestBuilder.
+     * Saves request params so reloadSubtitlesCronet() can reissue with &tlang=iw
+     * as a fallback when reflection-based track selection fails.
+     *
+     * We intentionally do NOT modify the URL here — doing so caused every
+     * timedtext request (English, Auto-translate, etc.) to be fetched in Hebrew.
+     * The reflection path (selectHebrewTrackViaApi) handles selection natively
+     * through YouTube's own subtitle player, so no URL mangling is needed.
+     */
     public static void saveTimedtextRequest(Object engine, String url,
                                              Object callback, Object executor) {
         try {
@@ -53,13 +50,17 @@ public final class HebrewSubtitlesHelper {
         } catch (Exception ignored) {}
     }
 
-    // ── Subtitle reload (Cronet fallback) ────────────────────────────────────
+    // ── Cronet fallback ───────────────────────────────────────────────────────
 
+    /**
+     * Re-issues the last saved timedtext request with &tlang=iw.
+     * Used only when the reflection-based selectHebrewTrackViaApi() fails.
+     */
     public static void reloadSubtitlesCronet(Context ctx) {
         try {
             if (savedEngine == null || savedBaseUrl == null
                     || savedCallback == null || savedExecutor == null) return;
-            String newUrl = savedBaseUrl + (isEnabled(ctx) ? "&tlang=iw" : "");
+            String newUrl = savedBaseUrl + "&tlang=iw";
             Method newUrlRequestBuilder = null;
             for (Method m : savedEngine.getClass().getMethods()) {
                 if ("newUrlRequestBuilder".equals(m.getName()) && m.getParameterCount() == 3) {
@@ -71,48 +72,34 @@ public final class HebrewSubtitlesHelper {
             Object builder = newUrlRequestBuilder.invoke(savedEngine, newUrl, savedCallback, savedExecutor);
             Object request = builder.getClass().getMethod("build").invoke(builder);
             request.getClass().getMethod("start").invoke(request);
+            android.util.Log.d("HebrewSubs", "reloadSubtitlesCronet: issued " + newUrl);
         } catch (Exception e) {
             android.util.Log.e("HebrewSubs", "reloadSubtitlesCronet failed: " + e);
         }
     }
 
-    // ── CC Panel injection (called from bytecode hook) ────────────────────────
+    // ── CC Panel injection ────────────────────────────────────────────────────
 
     /**
      * Called by the bytecode hook immediately before oju.N() calls addFooterView.
-     * Receives the oju instance and the ListView directly.
-     *
-     * Uses addFooterView (NOT addHeaderView): footers are placed AFTER adapter
-     * items, so adapter positions remain unchanged.  addHeaderView would shift
-     * all adapter positions by 1, causing oju.onItemClick to call adapter.getItem
-     * with the wrong index → ClassCastException on any tap.
-     *
-     * Stores a WeakRef to the oju instance for reflection-based Hebrew track
-     * selection when the user taps the injected item.
+     * Stores a WeakRef to the oju instance for reflection-based track selection.
      */
     public static void injectHebrewOption(Object ojuInstance, ListView listView) {
         try {
             if (listView == null) return;
-            // We inject BEFORE oju.N()'s own addFooterView, so count=0 on first call.
             if (listView.getFooterViewsCount() > 0) return;
 
-            // Store WeakRef to oju for later track selection via reflection
             ojuRef = new WeakReference<>(ojuInstance);
 
             Context ctx = listView.getContext();
             View item = createHebrewListItem(ctx);
             listView.addFooterView(item, null, false);
-            android.util.Log.d("HebrewSubs", "Hebrew option injected via addFooterView");
+            android.util.Log.d("HebrewSubs", "Hebrew option injected");
         } catch (Exception e) {
             android.util.Log.e("HebrewSubs", "injectHebrewOption failed: " + e);
         }
     }
 
-    /**
-     * Inflates YouTube's own bottom_sheet_list_checkmark_item layout so the
-     * Hebrew entry looks identical to every other CC track entry.
-     * Falls back to a plain TextView if the resource lookup fails.
-     */
     private static View createHebrewListItem(Context ctx) {
         try {
             int layoutId = ctx.getResources().getIdentifier(
@@ -129,7 +116,7 @@ public final class HebrewSubtitlesHelper {
                 return itemView;
             }
         } catch (Exception ignored) {}
-        return createHebrewItem(ctx, ViewGroup.LayoutParams.MATCH_PARENT);
+        return createHebrewItemFallback(ctx);
     }
 
     private static TextView findFirstTextView(View v) {
@@ -145,37 +132,37 @@ public final class HebrewSubtitlesHelper {
     }
 
     private static void onHebrewItemClicked(Context ctx) {
-        ctx.getSharedPreferences(PREFS, 0).edit().putBoolean(KEY_ON, true).apply();
         selectHebrewTrackViaApi(ctx);
         android.widget.Toast.makeText(ctx,
                 "\u05DB\u05EA\u05D5\u05D1\u05D9\u05D5\u05EA \u05E2\u05D1\u05E8\u05D9\u05EA: \u05E4\u05E2\u05D9\u05DC",
                 android.widget.Toast.LENGTH_SHORT).show();
     }
 
+    // ── Reflection-based Hebrew track selection ───────────────────────────────
+
     /**
-     * Selects the Hebrew auto-translate track directly via reflection on YouTube internals.
+     * Selects the Hebrew auto-translate track via reflection on YouTube internals.
      *
-     * Reflection chain (found via jadx reverse-engineering of YouTube 20.40.45):
-     *   oju.al       → aliq (alis implementation)
-     *   alis.b       → alxc (player subtitle component) — found by scanning for a field
-     *                  whose class has a method t() returning List
-     *   alxc.t()     → List<SubtitleTrack> — available language tracks
-     *   find Hebrew  → track whose toString() contains Hebrew chars (\u05D0–\u05EA),
-     *                  "iw", or "Hebrew"
-     *   alis.a(track) → directly selects the Hebrew track without opening sub-menus
+     * Chain (from jadx RE of YouTube 20.40.45):
+     *   oju.al (public aliq field)
+     *     → alis instance (implements aliq)
+     *       → field whose class has t():List  = alxc
+     *         → alxc.t() returns List<SubtitleTrack> (all auto-translate language options)
+     *           → find Hebrew by language code "iw"/"he" via String methods
+     *             → alis.a(hebrewTrack) — directly selects track, no sub-menu
      *
-     * Falls back to Cronet URL reload if any step fails.
+     * Falls back to one-shot Cronet URL reload if any step fails.
      */
     private static void selectHebrewTrackViaApi(Context ctx) {
         try {
             Object oju = ojuRef.get();
             if (oju == null) {
-                android.util.Log.w("HebrewSubs", "selectHebrewTrack: no oju ref, falling back");
+                android.util.Log.w("HebrewSubs", "selectHebrewTrack: no oju ref");
                 reloadSubtitlesCronet(ctx);
                 return;
             }
 
-            // Step 1: get oju.al (public aliq field)
+            // Step 1: oju.al → alis
             Field alField;
             try {
                 alField = oju.getClass().getField("al");
@@ -187,7 +174,7 @@ public final class HebrewSubtitlesHelper {
             Object alis = alField.get(oju);
             if (alis == null) { reloadSubtitlesCronet(ctx); return; }
 
-            // Step 2: find alxc in alis fields — the field whose class has t() returning List
+            // Step 2: find alxc in alis — field whose class has t() returning List
             Object alxc = null;
             for (Field f : alis.getClass().getDeclaredFields()) {
                 f.setAccessible(true);
@@ -195,50 +182,56 @@ public final class HebrewSubtitlesHelper {
                 try { val = f.get(alis); } catch (Exception ignored) { continue; }
                 if (val == null) continue;
                 try {
-                    Method tMethod = val.getClass().getMethod("t");
-                    if (List.class.isAssignableFrom(tMethod.getReturnType())) {
+                    Method t = val.getClass().getMethod("t");
+                    if (List.class.isAssignableFrom(t.getReturnType())) {
                         alxc = val;
                         break;
                     }
                 } catch (NoSuchMethodException ignored) {}
             }
             if (alxc == null) {
-                android.util.Log.w("HebrewSubs", "alxc not found in alis fields");
+                android.util.Log.w("HebrewSubs", "alxc not found");
                 reloadSubtitlesCronet(ctx);
                 return;
             }
 
-            // Step 3: call alxc.t() to get list of available language tracks
+            // Step 3: alxc.t() → list of language tracks
             Method tMethod = alxc.getClass().getMethod("t");
             @SuppressWarnings("unchecked")
             List<Object> tracks = (List<Object>) tMethod.invoke(alxc);
             if (tracks == null || tracks.isEmpty()) {
-                android.util.Log.w("HebrewSubs", "alxc.t() returned empty list");
+                android.util.Log.w("HebrewSubs", "alxc.t() empty");
                 reloadSubtitlesCronet(ctx);
                 return;
             }
 
-            // Step 4: find Hebrew track by display name
-            Object hebrewTrack = null;
-            for (Object track : tracks) {
-                String display = track.toString();
-                boolean hasHebrew = false;
-                for (char c : display.toCharArray()) {
-                    if (c >= '\u05D0' && c <= '\u05EA') { hasHebrew = true; break; }
-                }
-                if (hasHebrew || display.contains("iw")
-                        || display.toLowerCase().contains("hebrew")) {
-                    hebrewTrack = track;
-                    break;
-                }
-            }
+            // Step 4a: find Hebrew track by language code "iw" or "he"
+            // Strategy: call every no-param String method on each track and look for
+            // the BCP-47 language code.  This is locale-independent and avoids the
+            // problem of display names being in the user's UI language (Hebrew), which
+            // caused the generic Hebrew-chars check to match Ukrainian ("אוקראינית")
+            // before Hebrew ("עברית").
+            Object hebrewTrack = findTrackByCode(tracks, "iw", "he");
+
+            // Step 4b: exact display name fallback — works even if the language
+            // code method is renamed in a future YouTube version.
             if (hebrewTrack == null) {
-                android.util.Log.w("HebrewSubs", "Hebrew track not found in " + tracks.size() + " tracks");
+                for (Object track : tracks) {
+                    // "עברית" = \u05E2\u05D1\u05E8\u05D9\u05EA
+                    if (track.toString().contains("\u05E2\u05D1\u05E8\u05D9\u05EA")) {
+                        hebrewTrack = track;
+                        break;
+                    }
+                }
+            }
+
+            if (hebrewTrack == null) {
+                android.util.Log.w("HebrewSubs", "Hebrew track not found in " + tracks.size());
                 reloadSubtitlesCronet(ctx);
                 return;
             }
 
-            // Step 5: call alis.a(hebrewTrack) — the single-param aliq interface method
+            // Step 5: alis.a(hebrewTrack) — single-param method from aliq interface
             Method aMethod = null;
             for (Method m : alis.getClass().getMethods()) {
                 if ("a".equals(m.getName()) && m.getParameterCount() == 1) {
@@ -252,7 +245,7 @@ public final class HebrewSubtitlesHelper {
                 return;
             }
             aMethod.invoke(alis, hebrewTrack);
-            android.util.Log.d("HebrewSubs", "selectHebrewTrack: selected " + hebrewTrack);
+            android.util.Log.d("HebrewSubs", "Hebrew track selected: " + hebrewTrack);
 
         } catch (Exception e) {
             android.util.Log.e("HebrewSubs", "selectHebrewTrackViaApi failed: " + e);
@@ -260,9 +253,30 @@ public final class HebrewSubtitlesHelper {
         }
     }
 
+    /**
+     * Scans every no-param String-returning method on each track looking for
+     * an exact match to one of the given language codes.
+     */
+    private static Object findTrackByCode(List<Object> tracks, String... codes) {
+        for (Object track : tracks) {
+            for (Method m : track.getClass().getMethods()) {
+                if (m.getParameterCount() != 0) continue;
+                if (!String.class.equals(m.getReturnType())) continue;
+                try {
+                    String val = (String) m.invoke(track);
+                    if (val == null) continue;
+                    for (String code : codes) {
+                        if (code.equals(val)) return track;
+                    }
+                } catch (Exception ignored) {}
+            }
+        }
+        return null;
+    }
+
     // ── Fallback programmatic item ────────────────────────────────────────────
 
-    private static View createHebrewItem(Context ctx, int parentWidth) {
+    private static View createHebrewItemFallback(Context ctx) {
         TextView tv = new TextView(ctx);
         tv.setText("\u05E2\u05D1\u05E8\u05D9\u05EA (\u05EA\u05E8\u05D2\u05D5\u05DD \u05D0\u05D5\u05D8\u05D5\u05DE\u05D8\u05D9)");
         tv.setTextColor(Color.WHITE);
@@ -270,13 +284,11 @@ public final class HebrewSubtitlesHelper {
         tv.setTypeface(null, Typeface.NORMAL);
         tv.setGravity(Gravity.CENTER_VERTICAL);
         tv.setPadding(dp(ctx, 20), dp(ctx, 14), dp(ctx, 20), dp(ctx, 14));
-        int w = parentWidth > 0 ? parentWidth : ViewGroup.LayoutParams.MATCH_PARENT;
-        tv.setLayoutParams(new ViewGroup.LayoutParams(w, dp(ctx, 52)));
+        tv.setLayoutParams(new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 52)));
         tv.setOnClickListener(v -> onHebrewItemClicked(v.getContext()));
         return tv;
     }
-
-    // ── Helpers ───────────────────────────────────────────────────────────────
 
     private static int dp(Context ctx, float dp) {
         return Math.round(TypedValue.applyDimension(
