@@ -69,18 +69,14 @@ public final class HebrewSubtitlesHelper {
     public static void injectHebrewOption(Object ojuInstance, ListView listView) {
         try {
             if (listView == null) return;
-            // We inject AFTER YouTube's own addFooterView, so YouTube's footer
-            // is already there (count=1). Skip only if ours was already added (count>1).
-            if (listView.getFooterViewsCount() > 1) return;
-
+            // onCreateView creates a fresh ListView each time — no duplicate risk.
             ojuRef = new WeakReference<>(ojuInstance);
-
             Context ctx = listView.getContext();
             View item = createHebrewItem(ctx);
             listView.addFooterView(item, null, false);
             android.util.Log.d("HebrewSubs", "Hebrew option injected");
-        } catch (Exception e) {
-            android.util.Log.e("HebrewSubs", "injectHebrewOption failed: " + e);
+        } catch (Throwable t) {
+            android.util.Log.e("HebrewSubs", "injectHebrewOption failed: " + t);
         }
     }
 
