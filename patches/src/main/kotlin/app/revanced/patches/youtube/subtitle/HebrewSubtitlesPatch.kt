@@ -1,6 +1,7 @@
 package app.revanced.patches.youtube.subtitle
 
 import app.revanced.patcher.extensions.InstructionExtensions.addInstruction
+import app.revanced.patcher.extensions.InstructionExtensions.addInstructionsWithLabels
 import app.revanced.patcher.extensions.InstructionExtensions.getInstruction
 import app.revanced.patcher.fingerprint
 import app.revanced.patcher.patch.Patch
@@ -50,12 +51,6 @@ private fun Method.indexOfAddFooterViewInstruction() =
 
 // ── Fingerprints ──────────────────────────────────────────────────────────────
 
-/**
- * Fingerprint for the CronetEngine.newUrlRequestBuilder call site.
- * Used only to save request parameters for the Cronet fallback —
- * we no longer modify the URL inline (that caused all tracks to be
- * translated to Hebrew, not just the one the user selected).
- */
 @Suppress("DEPRECATION")
 private val transcriptUrlFingerprint = fingerprint {
     accessFlags(AccessFlags.PUBLIC, AccessFlags.FINAL)
@@ -66,9 +61,6 @@ private val transcriptUrlFingerprint = fingerprint {
     }
 }
 
-/**
- * Fingerprint for SubtitleMenuBottomSheetFragment.onCreateView (oju.N).
- */
 @Suppress("DEPRECATION")
 private val subtitleMenuSheetFingerprint = fingerprint {
     accessFlags(AccessFlags.PUBLIC, AccessFlags.FINAL)
@@ -96,7 +88,7 @@ private val subtitleMenuSheetFingerprint = fingerprint {
 @Suppress("unused", "DEPRECATION")
 val hebrewSubtitlesPatch: Patch = bytecodePatch(
     "Hebrew auto-translated subtitles",
-    "Adds a Hebrew option to the CC panel; switches to Hebrew via YouTube internal API.",
+    "Adds a Hebrew option to the CC panel; switches via flag-based URL interception.",
 ) {
     compatibleWith("com.google.android.youtube" to (null as Set<String>?))
 
@@ -104,43 +96,68 @@ val hebrewSubtitlesPatch: Patch = bytecodePatch(
 
     execute {
 
-        // ── Injection 0: save Cronet request params ───────────────────────────
+        // ── Injection 0: URL interceptor (flag-based) ─────────────────────────
         //
-        // We no longer modify the URL inline.  Doing so caused every timedtext
-        // request (English, Auto-translate, etc.) to be fetched in Hebrew.
-        // Instead we only save the engine/url/callback/executor so that
-        // reloadSubtitlesCronet() can issue a one-shot Hebrew request as a
-        // fallback when the reflection-based track selection fails.
+        // Saves request params AND conditionally appends &tlang=iw.
+        // interceptTimedtextUrl() only modifies the URL when the Hebrew flag is
+        // set — so English/other tracks are never affected.
         val urlClassDef = transcriptUrlFingerprint.classDefOrNull
             ?: throw PatchException("Could not find CronetEngine.newUrlRequestBuilder call site")
 
         transcriptUrlFingerprint.match(urlClassDef).method.apply {
             val urlIndex = indexOfNewUrlRequestBuilderInstruction()
-            val invoke = getInstruction<FiveRegisterInstruction>(urlIndex)
-            addInstruction(
+            val invoke   = getInstruction<FiveRegisterInstruction>(urlIndex)
+            val cronetReg   = invoke.registerC
+            val urlReg      = invoke.registerD
+            val callbackReg = invoke.registerE
+            val executorReg = invoke.registerF
+
+            addInstructionsWithLabels(
                 urlIndex,
-                "invoke-static { v${invoke.registerC}, v${invoke.registerD}, v${invoke.registerE}, v${invoke.registerF} }, $HELPER->saveTimedtextRequest(Ljava/lang/Object;Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Object;)V",
+                """
+                invoke-static { v$cronetReg, v$urlReg, v$callbackReg, v$executorReg }, $HELPER->saveTimedtextRequest(Ljava/lang/Object;Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Object;)V
+                invoke-static { v$urlReg }, $HELPER->interceptTimedtextUrl(Ljava/lang/String;)Ljava/lang/String;
+                move-result-object v$urlReg
+                """,
             )
         }
 
-        // ── Injection 1: CC panel Hebrew option ───────────────────────────────
-        //
-        // Injected BEFORE YouTube's addFooterView so our item appears above
-        // YouTube's settings footer.  p0 = oju instance (for reflection-based
-        // track selection), v$listViewReg = the ListView.
+        // ── Injections inside the CC panel class ──────────────────────────────
         val subtitleSheetClassDef = subtitleMenuSheetFingerprint.classDefOrNull
         if (subtitleSheetClassDef != null) {
+
+            // ── Injection 1: inject Hebrew footer item ────────────────────────
+            //
+            // Hooked in oju.N() (onCreateView), BEFORE YouTube's addFooterView.
+            // p0 = oju instance, v$listViewReg = ListView.
             try {
                 subtitleMenuSheetFingerprint.match(subtitleSheetClassDef).method.apply {
-                    val footerIdx = indexOfAddFooterViewInstruction()
+                    val footerIdx   = indexOfAddFooterViewInstruction()
                     val listViewReg = getInstruction<FiveRegisterInstruction>(footerIdx).registerC
                     addInstruction(
                         footerIdx,
                         "invoke-static { p0, v$listViewReg }, $HELPER->injectHebrewOption(Ljava/lang/Object;Landroid/widget/ListView;)V",
                     )
                 }
-            } catch (_: Exception) {
-                // Method match failed — Cronet fallback still active.
+            } catch (_: Exception) {}
+
+            // ── Injection 2: disable Hebrew when user picks another CC track ──
+            //
+            // oju.onItemClick is called when the user selects any adapter item
+            // (i.e., any NORMAL track such as English or Auto-translate).
+            // Our "עברית" footer uses a direct OnClickListener so it is NOT
+            // routed through onItemClick, which means this hook fires only when
+            // the user explicitly switches AWAY from Hebrew.
+            val onItemClickMethod = subtitleSheetClassDef.methods.firstOrNull { m ->
+                m.parameterTypes.size == 4 &&
+                m.parameterTypes[0].contains("AdapterView")
+            }
+            if (onItemClickMethod != null) {
+                try {
+                    onItemClickMethod.apply {
+                        addInstruction(0, "invoke-static { }, $HELPER->onCcItemSelected()V")
+                    }
+                } catch (_: Exception) {}
             }
         }
     }
