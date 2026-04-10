@@ -151,9 +151,8 @@ public final class HebrewSubtitlesHelper {
     public static void injectHebrewOption(ListView listView) {
         try {
             if (listView == null) return;
-            // oju.N() already added exactly 1 footer before our injection point.
-            // If footer count > 1 we've already injected.
-            if (listView.getFooterViewsCount() > 1) return;
+            // We now inject BEFORE oju.N()'s own addFooterView, so count=0 on first call.
+            if (listView.getFooterViewsCount() > 0) return;
 
             Context ctx = listView.getContext();
             View item = createHebrewListItem(ctx);
