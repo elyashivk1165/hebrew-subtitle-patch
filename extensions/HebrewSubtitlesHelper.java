@@ -12,6 +12,7 @@ import android.widget.TextView;
 
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.List;
 
@@ -19,15 +20,27 @@ public final class HebrewSubtitlesHelper {
 
     private static WeakReference<Object> ojuRef = new WeakReference<>(null);
 
-    // ── URL interceptor (save only — no longer used for selection) ────────────
+    /**
+     * Flag set just before we trigger a track-selection call.
+     * The URL interceptor watches for this and swaps &tlang=XX → &tlang=iw
+     * on the very next timedtext request YouTube builds.
+     */
+    private static volatile boolean hebrewPending = false;
+
+    // ── URL interceptor ───────────────────────────────────────────────────────
 
     public static void saveTimedtextRequest(Object engine, String url,
                                              Object callback, Object executor) {
-        // kept for potential future use
+        // kept for hook compatibility
     }
 
     public static String interceptTimedtextUrl(String url) {
-        return url; // no longer needed — YouTube builds the URL natively
+        if (hebrewPending && url != null && url.contains("&tlang=")) {
+            hebrewPending = false;
+            url = url.replaceFirst("&tlang=[^&]*", "&tlang=iw");
+            android.util.Log.d("HebrewSubs", "URL swapped → tlang=iw");
+        }
+        return url;
     }
 
     // ── CC Panel injection ────────────────────────────────────────────────────
@@ -117,16 +130,11 @@ public final class HebrewSubtitlesHelper {
     // ── Core selection logic ──────────────────────────────────────────────────
 
     /**
-     * Selects Hebrew via YouTube's own track-selection interface:
-     *
-     *   oju.al  → alis  (Laliq; implementation)
-     *   alxc    ← field in alis whose class has t()→List
-     *   alxc.t() → List of auto-translate language tracks
-     *   find track whose toString() contains Hebrew chars / "iw" / "Hebrew"
-     *   alis.a(hebrewTrack) → YouTube natively calls alxc.Q(track) → builds
-     *                          timedtext URL with &tlang=iw → displays subtitles
-     *
-     * No URL interception needed — YouTube handles the URL itself.
+     * Strategy: Hebrew is not in alxc.t() for most videos.
+     * Instead we take any track from the list and use it to trigger YouTube's
+     * native track-selection flow (which builds a fresh Cronet request with a
+     * fresh callback).  Just before the request leaves, interceptTimedtextUrl()
+     * swaps &tlang=XX → &tlang=iw, so YouTube fetches Hebrew subtitles.
      */
     private static boolean selectHebrew() {
         try {
@@ -150,7 +158,7 @@ public final class HebrewSubtitlesHelper {
                 return false;
             }
 
-            // Step 3: alxc.t() → language list
+            // Step 3: alxc.t() → language list — grab any track as a trigger
             Method tMethod = alxc.getClass().getMethod("t");
             @SuppressWarnings("unchecked")
             List<Object> tracks = (List<Object>) tMethod.invoke(alxc);
@@ -158,53 +166,58 @@ public final class HebrewSubtitlesHelper {
                 android.util.Log.w("HebrewSubs", "alxc.t() returned empty");
                 return false;
             }
-            android.util.Log.d("HebrewSubs", "alxc.t() returned " + tracks.size() + " tracks");
+            Object triggerTrack = tracks.get(0);
+            android.util.Log.d("HebrewSubs", "trigger track: g=" + getLanguageCode(triggerTrack));
 
-            // Step 4: dump all tracks with method values for diagnosis
-            android.util.Log.d("HebrewSubs", "=== TRACK DUMP ===");
-            for (Object track : tracks) {
-                StringBuilder sb = new StringBuilder();
-                sb.append("TRACK toString=").append(track.toString()).append(" | ");
-                for (java.lang.reflect.Method m : track.getClass().getMethods()) {
-                    if (m.getParameterCount() != 0) continue;
-                    Class<?> ret = m.getReturnType();
-                    if (ret != String.class && ret != boolean.class && ret != Boolean.class) continue;
-                    try {
-                        Object val = m.invoke(track);
-                        sb.append(m.getName()).append("=").append(val).append(" | ");
-                    } catch (Exception ignored) {}
-                }
-                android.util.Log.d("HebrewSubs", sb.toString());
-            }
-            android.util.Log.d("HebrewSubs", "=== END DUMP ===");
-            Object hebrewTrack = null;
+            // Step 4: arm the URL interceptor BEFORE triggering the request
+            hebrewPending = true;
 
-            // Step 5: alis.a(hebrewTrack) — the aliq interface method
+            // Step 5a: try alis.a(triggerTrack) — YouTube's native interface
             Method aMethod = findAliqAMethod(alis);
             if (aMethod != null) {
-                android.util.Log.d("HebrewSubs", "Calling alis." + aMethod.getName() + "(hebrewTrack)");
-                aMethod.invoke(alis, hebrewTrack);
-                return true;
+                try {
+                    android.util.Log.d("HebrewSubs", "calling alis." + aMethod.getName() + "()");
+                    aMethod.invoke(alis, triggerTrack);
+                    android.util.Log.d("HebrewSubs", "alis.a() ok — waiting for URL intercept");
+                    return true;
+                } catch (InvocationTargetException e) {
+                    android.util.Log.w("HebrewSubs", "alis.a() threw: " + e.getCause());
+                }
             }
 
-            // Fallback: find Q directly on alxc (method taking SubtitleTrack)
+            // Step 5b: fallback — alxc.Q(triggerTrack) directly
             Method qMethod = findSubtitleTrackMethod(alxc);
             if (qMethod != null) {
-                android.util.Log.d("HebrewSubs", "Calling alxc." + qMethod.getName() + "(hebrewTrack)");
-                qMethod.invoke(alxc, hebrewTrack);
-                return true;
+                try {
+                    android.util.Log.d("HebrewSubs", "calling alxc." + qMethod.getName() + "()");
+                    qMethod.invoke(alxc, triggerTrack);
+                    android.util.Log.d("HebrewSubs", "alxc.Q() ok — waiting for URL intercept");
+                    return true;
+                } catch (InvocationTargetException e) {
+                    android.util.Log.w("HebrewSubs", "alxc.Q() threw: " + e.getCause());
+                }
             }
 
-            android.util.Log.w("HebrewSubs", "no suitable method found on alis or alxc");
+            hebrewPending = false; // nothing fired — disarm
+            android.util.Log.w("HebrewSubs", "no method triggered a request");
             return false;
 
         } catch (Exception e) {
+            hebrewPending = false;
             android.util.Log.e("HebrewSubs", "selectHebrew failed: " + e);
             return false;
         }
     }
 
     // ── Reflection helpers ────────────────────────────────────────────────────
+
+    private static String getLanguageCode(Object track) {
+        try {
+            return (String) track.getClass().getMethod("g").invoke(track);
+        } catch (Exception ignored) {
+            return track.toString();
+        }
+    }
 
     /** Gets a declared field value (handles private fields). */
     private static Object getDeclaredFieldValue(Object obj, String name) {
@@ -214,7 +227,6 @@ public final class HebrewSubtitlesHelper {
             return f.get(obj);
         } catch (NoSuchFieldException ignored) {
         } catch (Exception ignored) {}
-        // Walk superclass chain
         for (Class<?> c = obj.getClass().getSuperclass();
              c != null && c != Object.class; c = c.getSuperclass()) {
             try {
@@ -248,10 +260,7 @@ public final class HebrewSubtitlesHelper {
         return null;
     }
 
-    /**
-     * Finds the single-parameter void method on alis that accepts a SubtitleTrack.
-     * Matches by "SubtitleTrack" appearing anywhere in the parameter type name.
-     */
+    /** Finds the single-parameter void method on alis that accepts a SubtitleTrack. */
     private static Method findAliqAMethod(Object alis) {
         for (Method m : alis.getClass().getDeclaredMethods()) {
             if (m.getParameterCount() != 1) continue;
@@ -264,10 +273,7 @@ public final class HebrewSubtitlesHelper {
         return null;
     }
 
-    /**
-     * Finds a void method on alxc that takes a SubtitleTrack parameter.
-     * Specifically avoids boolean/primitive params that trip up the old heuristic.
-     */
+    /** Finds a void method on alxc that takes a SubtitleTrack parameter. */
     private static Method findSubtitleTrackMethod(Object alxc) {
         for (Method m : alxc.getClass().getDeclaredMethods()) {
             if (m.getParameterCount() != 1) continue;
@@ -278,16 +284,6 @@ public final class HebrewSubtitlesHelper {
             }
         }
         return null;
-    }
-
-    /** Returns true if the string contains Hebrew chars, "iw", or "Hebrew". */
-    private static boolean isHebrewString(String s) {
-        if (s == null) return false;
-        if (s.contains("iw") || s.toLowerCase().contains("hebrew")) return true;
-        for (char c : s.toCharArray()) {
-            if (c >= '\u05D0' && c <= '\u05EA') return true;
-        }
-        return false;
     }
 
     private static int dp(Context ctx, float dp) {
