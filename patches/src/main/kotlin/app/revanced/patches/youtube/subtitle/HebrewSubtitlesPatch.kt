@@ -294,8 +294,10 @@ val hebrewSubtitlesPatch: Patch = bytecodePatch(
                 subtitleMenuSheetFingerprint.match(subtitleSheetClassDef).method.apply {
                     val footerIdx = indexOfAddFooterViewInstruction()
                     val listViewReg = getInstruction<FiveRegisterInstruction>(footerIdx).registerC
+                    // Inject BEFORE YouTube's addFooterView so our item appears
+                    // immediately below the track list, above YouTube's settings footer.
                     addInstruction(
-                        footerIdx + 1,
+                        footerIdx,
                         "invoke-static { v$listViewReg }, $HELPER->injectHebrewOption(Landroid/widget/ListView;)V",
                     )
                 }
