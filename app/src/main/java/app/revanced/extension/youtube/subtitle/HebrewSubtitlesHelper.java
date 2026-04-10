@@ -69,7 +69,9 @@ public final class HebrewSubtitlesHelper {
     public static void injectHebrewOption(Object ojuInstance, ListView listView) {
         try {
             if (listView == null) return;
-            if (listView.getFooterViewsCount() > 0) return;
+            // We inject AFTER YouTube's own addFooterView, so YouTube's footer
+            // is already there (count=1). Skip only if ours was already added (count>1).
+            if (listView.getFooterViewsCount() > 1) return;
 
             ojuRef = new WeakReference<>(ojuInstance);
 
@@ -141,7 +143,8 @@ public final class HebrewSubtitlesHelper {
             // oju.al = alis (Laliq; implementation = Lalis;)
             Object alis = null;
             try {
-                Field alField = oju.getClass().getField("al");
+                Field alField = oju.getClass().getDeclaredField("al");
+                alField.setAccessible(true);
                 alis = alField.get(oju);
             } catch (Exception e) {
                 android.util.Log.w("HebrewSubs", "oju.al not found: " + e);
@@ -170,7 +173,8 @@ public final class HebrewSubtitlesHelper {
                 hebrewEnabled = true;
                 Object currentTrack = null;
                 try {
-                    Field akField = oju.getClass().getField("ak");
+                    Field akField = oju.getClass().getDeclaredField("ak");
+                    akField.setAccessible(true);
                     currentTrack = akField.get(oju);
                 } catch (Exception ignored) {}
                 if (currentTrack == null) return false;
@@ -336,7 +340,8 @@ public final class HebrewSubtitlesHelper {
 
             Object currentTrack = null;
             try {
-                Field akField = oju.getClass().getField("ak");
+                Field akField = oju.getClass().getDeclaredField("ak");
+                akField.setAccessible(true);
                 currentTrack = akField.get(oju);
             } catch (Exception e) {
                 android.util.Log.w("HebrewSubs", "oju.ak not found: " + e);
@@ -344,7 +349,8 @@ public final class HebrewSubtitlesHelper {
 
             Object alis = null;
             try {
-                Field alField = oju.getClass().getField("al");
+                Field alField = oju.getClass().getDeclaredField("al");
+                alField.setAccessible(true);
                 alis = alField.get(oju);
             } catch (Exception e) {
                 android.util.Log.w("HebrewSubs", "oju.al not found: " + e);
