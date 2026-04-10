@@ -9,6 +9,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
+import android.widget.ListView;
 import android.widget.TextView;
 
 import java.lang.ref.WeakReference;
@@ -136,6 +137,76 @@ public final class HebrewSubtitlesHelper {
 
     // ── CC Panel injection (called from bytecode hook) ────────────────────────
 
+    // ── Direct ListView injection (primary path, RE-based) ───────────────────
+
+    /**
+     * Called by the bytecode hook immediately after oju.N() calls addFooterView.
+     * Receives the ListView directly — no view-tree scanning needed.
+     *
+     * Uses addHeaderView(view, null, false) so the Hebrew item is NOT selectable
+     * through the adapter's onItemClick (which casts adapter items to oix and
+     * would throw ClassCastException for any non-oix item).  The header gets its
+     * own OnClickListener instead.
+     */
+    public static void injectHebrewOption(ListView listView) {
+        try {
+            if (listView == null) return;
+            // Don't inject twice (header count > 0 means we already added ours)
+            if (listView.getHeaderViewsCount() > 0) return;
+
+            Context ctx = listView.getContext();
+            View item = createHebrewListItem(ctx);
+            listView.addHeaderView(item, null, false);
+            android.util.Log.d("HebrewSubs", "Hebrew option injected via addHeaderView");
+        } catch (Exception e) {
+            android.util.Log.e("HebrewSubs", "injectHebrewOption failed: " + e);
+        }
+    }
+
+    /**
+     * Inflates YouTube's own bottom_sheet_list_checkmark_item layout so the
+     * Hebrew entry looks identical to every other CC track entry.
+     * Falls back to a plain TextView if the resource lookup fails.
+     */
+    private static View createHebrewListItem(Context ctx) {
+        try {
+            int layoutId = ctx.getResources().getIdentifier(
+                    "bottom_sheet_list_checkmark_item", "layout", ctx.getPackageName());
+            if (layoutId != 0) {
+                android.view.LayoutInflater inflater = android.view.LayoutInflater.from(ctx);
+                View itemView = inflater.inflate(layoutId, null, false);
+                TextView tv = findFirstTextView(itemView);
+                if (tv != null) tv.setText("\u05E2\u05D1\u05E8\u05D9\u05EA (\u05EA\u05E8\u05D2\u05D5\u05DD \u05D0\u05D5\u05D8\u05D5\u05DE\u05D8\u05D9)");
+                itemView.setOnClickListener(v -> onHebrewItemClicked(v.getContext()));
+                return itemView;
+            }
+        } catch (Exception ignored) {}
+        // Fallback: programmatic item matching existing createHebrewItem style
+        return createHebrewItem(ctx, ViewGroup.LayoutParams.MATCH_PARENT);
+    }
+
+    private static TextView findFirstTextView(View v) {
+        if (v instanceof TextView) return (TextView) v;
+        if (v instanceof ViewGroup) {
+            ViewGroup vg = (ViewGroup) v;
+            for (int i = 0; i < vg.getChildCount(); i++) {
+                TextView found = findFirstTextView(vg.getChildAt(i));
+                if (found != null) return found;
+            }
+        }
+        return null;
+    }
+
+    private static void onHebrewItemClicked(Context ctx) {
+        ctx.getSharedPreferences(PREFS, 0).edit().putBoolean(KEY_ON, true).apply();
+        View myBtn = btnRef.get();
+        if (myBtn != null) myBtn.setAlpha(1.0f);
+        reloadSubtitlesCronet(ctx);
+        android.widget.Toast.makeText(ctx,
+                "\u05DB\u05EA\u05D5\u05D1\u05D9\u05D5\u05EA \u05E2\u05D1\u05E8\u05D9\u05EA: \u05E4\u05E2\u05D9\u05DC",
+                android.widget.Toast.LENGTH_SHORT).show();
+    }
+
     /**
      * Called by the patch when the captions bottom-sheet builder method runs.
      * Posts a delayed scan so Elements JS has time to populate the list items.
@@ -175,19 +246,42 @@ public final class HebrewSubtitlesHelper {
     }
 
     /**
-     * Scans the window for a visible ViewGroup whose children contain ≥ 2
-     * CC-option text items (Off / English / Auto-translate / etc.), then injects
-     * "עברית" into that container.  This is both the ViewTreeObserver path and
-     * the post-hook delayed path.
+     * Primary injection path — called from both the ViewTreeObserver and the
+     * bytecode-hook post-delay.
+     *
+     * Detection strategy (language-independent):
+     *   1. Look for a visible TextView whose text contains the beginning of
+     *      YouTube's own "subtitle_menu_settings_footer_info" string resource.
+     *      This string appears only in the CC (subtitles) bottom-sheet footer.
+     *   2. Walk UP from that TextView to find its nearest ancestor ViewGroup
+     *      that has ≥ 2 children AND has a sibling (or is the list itself).
+     *   3. Among the siblings/children of that ancestor, inject "עברית" into
+     *      the ViewGroup with the most children (= the track list).
+     *
+     * If the resource string is missing (shouldn't happen for YouTube), falls
+     * back to a structural approach: largest visible ViewGroup inside the
+     * deepest bottom-sheet container.
      */
     private static void injectByCcTextScan(View rootView) {
         try {
-            ViewGroup list = findCcListByText(rootView);
-            if (list == null) {
+            Context ctx = rootView.getContext();
+
+            // ── Step 1: confirm CC panel is open ────────────────────────────────
+            View footerAnchor = findCcFooterAnchor(rootView, ctx);
+            if (footerAnchor == null) {
                 ccPanelInjected = false;
                 return;
             }
             if (ccPanelInjected) return;
+
+            // ── Step 2: find the track-list container ────────────────────────────
+            // Walk up from the footer anchor until we find a parent that has
+            // a sibling ViewGroup with ≥ 2 children — that sibling IS the list.
+            ViewGroup list = findListSiblingOf(footerAnchor);
+            if (list == null) {
+                android.util.Log.w("HebrewSubs", "footer found but list sibling not found");
+                return;
+            }
 
             // Don't add twice
             for (int i = 0; i < list.getChildCount(); i++) {
@@ -197,7 +291,6 @@ public final class HebrewSubtitlesHelper {
                 }
             }
 
-            Context ctx = list.getContext();
             View item = createHebrewItem(ctx, list.getMeasuredWidth());
             int insertAt = Math.max(0, list.getChildCount() - 1);
             list.addView(item, insertAt);
@@ -212,56 +305,73 @@ public final class HebrewSubtitlesHelper {
     }
 
     /**
-     * BFS: finds the first visible ViewGroup whose direct or one-level-deep
-     * children include ≥ 2 CC option text strings.
+     * Finds the CC panel footer by searching for a visible TextView whose text
+     * starts with the first 12 characters of YouTube's own
+     * {@code subtitle_menu_settings_footer_info} string resource.
+     * Returns null if the CC panel is not currently open.
      */
-    private static ViewGroup findCcListByText(View root) {
-        java.util.ArrayDeque<View> queue = new java.util.ArrayDeque<>();
-        queue.add(root);
-        while (!queue.isEmpty()) {
-            View v = queue.poll();
-            if (!(v instanceof ViewGroup) || !v.isShown()) continue;
-            ViewGroup vg = (ViewGroup) v;
-            if (vg.getChildCount() >= 2 && hasCcOptionTexts(vg)) return vg;
-            for (int i = 0; i < vg.getChildCount(); i++) queue.add(vg.getChildAt(i));
+    private static View findCcFooterAnchor(View root, Context ctx) {
+        // Resolve YouTube's own footer string (language-independent key).
+        int resId = ctx.getResources().getIdentifier(
+                "subtitle_menu_settings_footer_info", "string", ctx.getPackageName());
+        String prefix = null;
+        if (resId != 0) {
+            String full = ctx.getString(resId);
+            if (full.length() > 8) prefix = full.substring(0, Math.min(12, full.length()));
+        }
+        if (prefix == null) {
+            android.util.Log.w("HebrewSubs",
+                    "subtitle_menu_settings_footer_info not found in resources");
+            return null;
+        }
+        final String needle = prefix;
+        return findVisibleTextView(root, tv ->
+                tv.getText().toString().startsWith(needle));
+    }
+
+    /**
+     * Walks UP from {@code anchor} looking for a parent ViewGroup that has
+     * ≥ 2 children, then returns the child among them with the MOST children
+     * (that is not the direct ancestor of anchor) — this is the track list.
+     */
+    private static ViewGroup findListSiblingOf(View anchor) {
+        android.view.ViewParent p = anchor.getParent();
+        View prev = anchor;
+        for (int depth = 0; depth < 12 && p instanceof ViewGroup; depth++) {
+            ViewGroup parent = (ViewGroup) p;
+            if (parent.getChildCount() >= 2) {
+                // Find the sibling (not our ancestry chain) with the most children
+                ViewGroup best = null;
+                int bestCount = 0;
+                for (int i = 0; i < parent.getChildCount(); i++) {
+                    View child = parent.getChildAt(i);
+                    if (child == prev) continue;
+                    if (child instanceof ViewGroup) {
+                        int cnt = ((ViewGroup) child).getChildCount();
+                        if (cnt > bestCount) { bestCount = cnt; best = (ViewGroup) child; }
+                    }
+                }
+                if (best != null && bestCount >= 1) return best;
+            }
+            prev = parent;
+            p = parent.getParent();
         }
         return null;
     }
 
-    /** Returns true if this ViewGroup has ≥ 2 direct/shallow CC-option text items. */
-    private static boolean hasCcOptionTexts(ViewGroup vg) {
-        int hits = 0;
-        for (int i = 0; i < vg.getChildCount(); i++) {
-            String t = shallowText(vg.getChildAt(i));
-            if (t != null && isCcOptionText(t)) {
-                hits++;
-                if (hits >= 2) return true;
-            }
-        }
-        return false;
-    }
-
-    /** Returns the text of a View or its first TextView child. */
-    private static String shallowText(View v) {
-        if (v instanceof TextView) return ((TextView) v).getText().toString().trim();
+    /** DFS: finds the first visible TextView matching {@code predicate}. */
+    private static View findVisibleTextView(View v,
+            java.util.function.Predicate<TextView> predicate) {
+        if (!v.isShown()) return null;
+        if (v instanceof TextView && predicate.test((TextView) v)) return v;
         if (v instanceof ViewGroup) {
             ViewGroup vg = (ViewGroup) v;
             for (int i = 0; i < vg.getChildCount(); i++) {
-                if (vg.getChildAt(i) instanceof TextView) {
-                    String t = ((TextView) vg.getChildAt(i)).getText().toString().trim();
-                    if (!t.isEmpty()) return t;
-                }
+                View found = findVisibleTextView(vg.getChildAt(i), predicate);
+                if (found != null) return found;
             }
         }
         return null;
-    }
-
-    private static boolean isCcOptionText(String text) {
-        String lower = text.toLowerCase();
-        return lower.equals("off") || lower.equals("כבוי")
-                || lower.contains("english") || lower.contains("auto-translat")
-                || lower.contains("תרגום") || lower.contains("caption")
-                || lower.contains("subtitle") || lower.contains("כתוביות");
     }
 
     private static View createHebrewItem(Context ctx, int parentWidth) {
