@@ -138,22 +138,19 @@ public final class HebrewSubtitlesHelper {
 
     /**
      * Called by the patch when the captions bottom-sheet builder method runs.
-     * {@code sheetObject} is {@code this} of that method — the controller that
-     * builds/inflates the CC panel.  We post a Runnable on its first found View
-     * so injection happens after the panel is fully laid out.
+     * Posts a delayed scan so Elements JS has time to populate the list items.
      */
     public static void onCaptionsSheetBuilt(Object sheetObject) {
         try {
-            // Walk the object's fields to find the first View (the panel root)
             View panelRoot = findViewInObject(sheetObject, 0);
             if (panelRoot == null) {
-                android.util.Log.w("HebrewSubs", "onCaptionsSheetBuilt: no View found in sheet object");
-                // Fall back to ViewTreeObserver on the window
+                android.util.Log.w("HebrewSubs", "onCaptionsSheetBuilt: no View in sheet object");
                 return;
             }
-            android.util.Log.d("HebrewSubs", "onCaptionsSheetBuilt: panel root = "
+            android.util.Log.d("HebrewSubs", "onCaptionsSheetBuilt: got "
                     + panelRoot.getClass().getSimpleName());
-            panelRoot.post(() -> injectIntoPanelRoot(panelRoot));
+            // Delay 500ms so Elements JS can populate the list before we scan
+            panelRoot.postDelayed(() -> injectByCcTextScan(panelRoot.getRootView()), 500);
         } catch (Exception e) {
             android.util.Log.e("HebrewSubs", "onCaptionsSheetBuilt failed: " + e);
         }
@@ -177,56 +174,94 @@ public final class HebrewSubtitlesHelper {
         return null;
     }
 
-    private static void injectIntoPanelRoot(View root) {
+    /**
+     * Scans the window for a visible ViewGroup whose children contain ≥ 2
+     * CC-option text items (Off / English / Auto-translate / etc.), then injects
+     * "עברית" into that container.  This is both the ViewTreeObserver path and
+     * the post-hook delayed path.
+     */
+    private static void injectByCcTextScan(View rootView) {
         try {
-            if (ccPanelInjected) return;
-
-            Context ctx = root.getContext();
-
-            // Find the list container: deepest ViewGroup with ≥ 2 children
-            ViewGroup listContainer = findListContainer(root);
-            if (listContainer == null) {
-                android.util.Log.w("HebrewSubs", "injectIntoPanelRoot: list container not found");
-                logViewHierarchy(root, 0, 6);
+            ViewGroup list = findCcListByText(rootView);
+            if (list == null) {
+                ccPanelInjected = false;
                 return;
             }
+            if (ccPanelInjected) return;
 
             // Don't add twice
-            for (int i = 0; i < listContainer.getChildCount(); i++) {
-                if ("hebrew_cc_option".equals(listContainer.getChildAt(i).getTag())) return;
+            for (int i = 0; i < list.getChildCount(); i++) {
+                if ("hebrew_cc_option".equals(list.getChildAt(i).getTag())) {
+                    ccPanelInjected = true;
+                    return;
+                }
             }
 
-            View item = createHebrewItem(ctx, listContainer.getMeasuredWidth());
-            // Insert before last child (typically "Auto-translate" or footer)
-            int insertAt = Math.max(0, listContainer.getChildCount() - 1);
-            listContainer.addView(item, insertAt);
-
+            Context ctx = list.getContext();
+            View item = createHebrewItem(ctx, list.getMeasuredWidth());
+            int insertAt = Math.max(0, list.getChildCount() - 1);
+            list.addView(item, insertAt);
             ccPanelInjected = true;
-            android.util.Log.d("HebrewSubs", "Hebrew option injected at index " + insertAt
-                    + " in " + listContainer.getClass().getSimpleName());
+            android.util.Log.d("HebrewSubs",
+                    "Hebrew CC option injected at index " + insertAt
+                    + " into " + list.getClass().getSimpleName()
+                    + " [" + list.getChildCount() + " children]");
         } catch (Exception e) {
-            android.util.Log.e("HebrewSubs", "injectIntoPanelRoot failed: " + e);
+            android.util.Log.e("HebrewSubs", "injectByCcTextScan failed: " + e);
         }
     }
 
-    private static ViewGroup findListContainer(View root) {
-        // BFS: find the ViewGroup with the most direct-children among candidates
-        ViewGroup best = null;
-        int bestCount = 1;
+    /**
+     * BFS: finds the first visible ViewGroup whose direct or one-level-deep
+     * children include ≥ 2 CC option text strings.
+     */
+    private static ViewGroup findCcListByText(View root) {
         java.util.ArrayDeque<View> queue = new java.util.ArrayDeque<>();
         queue.add(root);
         while (!queue.isEmpty()) {
             View v = queue.poll();
-            if (v instanceof ViewGroup) {
-                ViewGroup vg = (ViewGroup) v;
-                if (vg.getChildCount() > bestCount) {
-                    bestCount = vg.getChildCount();
-                    best = vg;
-                }
-                for (int i = 0; i < vg.getChildCount(); i++) queue.add(vg.getChildAt(i));
+            if (!(v instanceof ViewGroup) || !v.isShown()) continue;
+            ViewGroup vg = (ViewGroup) v;
+            if (vg.getChildCount() >= 2 && hasCcOptionTexts(vg)) return vg;
+            for (int i = 0; i < vg.getChildCount(); i++) queue.add(vg.getChildAt(i));
+        }
+        return null;
+    }
+
+    /** Returns true if this ViewGroup has ≥ 2 direct/shallow CC-option text items. */
+    private static boolean hasCcOptionTexts(ViewGroup vg) {
+        int hits = 0;
+        for (int i = 0; i < vg.getChildCount(); i++) {
+            String t = shallowText(vg.getChildAt(i));
+            if (t != null && isCcOptionText(t)) {
+                hits++;
+                if (hits >= 2) return true;
             }
         }
-        return best;
+        return false;
+    }
+
+    /** Returns the text of a View or its first TextView child. */
+    private static String shallowText(View v) {
+        if (v instanceof TextView) return ((TextView) v).getText().toString().trim();
+        if (v instanceof ViewGroup) {
+            ViewGroup vg = (ViewGroup) v;
+            for (int i = 0; i < vg.getChildCount(); i++) {
+                if (vg.getChildAt(i) instanceof TextView) {
+                    String t = ((TextView) vg.getChildAt(i)).getText().toString().trim();
+                    if (!t.isEmpty()) return t;
+                }
+            }
+        }
+        return null;
+    }
+
+    private static boolean isCcOptionText(String text) {
+        String lower = text.toLowerCase();
+        return lower.equals("off") || lower.equals("כבוי")
+                || lower.contains("english") || lower.contains("auto-translat")
+                || lower.contains("תרגום") || lower.contains("caption")
+                || lower.contains("subtitle") || lower.contains("כתוביות");
     }
 
     private static View createHebrewItem(Context ctx, int parentWidth) {
@@ -262,59 +297,12 @@ public final class HebrewSubtitlesHelper {
             android.view.ViewTreeObserver vto = rootView.getViewTreeObserver();
             if (!vto.isAlive()) return;
             vto.addOnGlobalLayoutListener(() -> {
-                try { checkForCcPanelViaResource(rootView); }
+                try { injectByCcTextScan(rootView); }
                 catch (Exception ignored) {}
             });
+            android.util.Log.d("HebrewSubs", "CC panel probe registered");
         } catch (Exception e) {
             android.util.Log.e("HebrewSubs", "startCcPanelProbe failed: " + e);
-        }
-    }
-
-    private static void checkForCcPanelViaResource(View rootView) {
-        Context ctx = rootView.getContext();
-
-        // Use bottom_sheet_footer_text (Material Design) as anchor for any bottom sheet
-        int footerResId = ctx.getResources().getIdentifier(
-                "bottom_sheet_footer_text", "id", ctx.getPackageName());
-        if (footerResId == 0) return;
-
-        View footerView = rootView.findViewById(footerResId);
-        boolean panelOpen = footerView != null && footerView.isShown();
-
-        if (!panelOpen) { ccPanelInjected = false; return; }
-        if (ccPanelInjected) return;
-
-        // Confirm it's the CC panel: footer text should match subtitle_menu_settings_footer_info
-        int strResId = ctx.getResources().getIdentifier(
-                "subtitle_menu_settings_footer_info", "string", ctx.getPackageName());
-        if (strResId != 0 && footerView instanceof TextView) {
-            String actual   = ((TextView) footerView).getText().toString();
-            String expected = ctx.getString(strResId);
-            if (!expected.isEmpty() && !actual.isEmpty()
-                    && !actual.contains(expected.substring(0, Math.min(8, expected.length())))) {
-                return; // Different bottom sheet
-            }
-        }
-
-        android.util.Log.d("HebrewSubs", "CC panel detected via ViewTreeObserver, injecting...");
-        injectIntoPanelRoot(footerView.getRootView());
-    }
-
-    // ── Logging helpers ───────────────────────────────────────────────────────
-
-    private static void logViewHierarchy(View view, int depth, int maxDepth) {
-        if (depth > maxDepth || view == null) return;
-        String indent = "  ".repeat(depth);
-        String info = indent + view.getClass().getSimpleName()
-                + "[id=" + Integer.toHexString(view.getId()) + "]";
-        if (view instanceof TextView) info += " text=\"" + ((TextView) view).getText() + "\"";
-        if (view instanceof ViewGroup) info += " children=" + ((ViewGroup) view).getChildCount();
-        android.util.Log.d("HebrewSubs", info);
-        if (view instanceof ViewGroup) {
-            ViewGroup vg = (ViewGroup) view;
-            for (int i = 0; i < vg.getChildCount(); i++) {
-                logViewHierarchy(vg.getChildAt(i), depth + 1, maxDepth);
-            }
         }
     }
 
