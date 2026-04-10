@@ -143,21 +143,22 @@ public final class HebrewSubtitlesHelper {
      * Called by the bytecode hook immediately after oju.N() calls addFooterView.
      * Receives the ListView directly — no view-tree scanning needed.
      *
-     * Uses addHeaderView(view, null, false) so the Hebrew item is NOT selectable
-     * through the adapter's onItemClick (which casts adapter items to oix and
-     * would throw ClassCastException for any non-oix item).  The header gets its
-     * own OnClickListener instead.
+     * Uses addFooterView (NOT addHeaderView): footers are placed AFTER adapter
+     * items, so adapter positions remain unchanged.  addHeaderView would shift
+     * all adapter positions by 1, causing oju.onItemClick to call adapter.getItem
+     * with the wrong index → ClassCastException on any tap.
      */
     public static void injectHebrewOption(ListView listView) {
         try {
             if (listView == null) return;
-            // Don't inject twice (header count > 0 means we already added ours)
-            if (listView.getHeaderViewsCount() > 0) return;
+            // oju.N() already added exactly 1 footer before our injection point.
+            // If footer count > 1 we've already injected.
+            if (listView.getFooterViewsCount() > 1) return;
 
             Context ctx = listView.getContext();
             View item = createHebrewListItem(ctx);
-            listView.addHeaderView(item, null, false);
-            android.util.Log.d("HebrewSubs", "Hebrew option injected via addHeaderView");
+            listView.addFooterView(item, null, false);
+            android.util.Log.d("HebrewSubs", "Hebrew option injected via addFooterView");
         } catch (Exception e) {
             android.util.Log.e("HebrewSubs", "injectHebrewOption failed: " + e);
         }
