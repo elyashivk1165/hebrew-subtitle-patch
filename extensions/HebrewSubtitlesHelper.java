@@ -17,103 +17,70 @@ import java.lang.reflect.Method;
 public final class HebrewSubtitlesHelper {
 
     private static final String PREFS = "revanced_prefs";
-    private static final String KEY_ON = "revanced_hebrew_subtitles_enabled";
+    private static final String KEY_ON  = "revanced_hebrew_subtitles_enabled";
 
-    private static WeakReference<View> btnRef = new WeakReference<>(null);
+    private static WeakReference<View> btnRef   = new WeakReference<>(null);
     private static WeakReference<View> ccBtnRef = new WeakReference<>(null);
 
-    // Saved timedtext request components for in-video reload
+    // Saved timedtext request components
     private static Object savedEngine;
-    private static String savedBaseUrl;   // base URL WITHOUT &tlang=iw
+    private static String savedBaseUrl;
     private static Object savedCallback;
     private static Object savedExecutor;
 
-    // ── URL interceptor hooks ───────────────────────────────────────────────────
+    // CC panel injection state
+    private static boolean ccPanelInjected = false;
+    private static boolean probeRegistered = false;
+
+    // ── Preference ───────────────────────────────────────────────────────────
 
     public static boolean isEnabled(Context context) {
         try {
-            return context.getSharedPreferences(PREFS, 0)
-                    .getBoolean(KEY_ON, true);
+            return context.getSharedPreferences(PREFS, 0).getBoolean(KEY_ON, true);
         } catch (Exception e) {
             return true;
         }
     }
 
-    /**
-     * Called from the URL interceptor BEFORE &tlang=iw is injected.
-     * Saves the CronetEngine, base URL, callback, and executor so we can
-     * replay the request when the toggle button is tapped.
-     */
+    // ── URL interceptor ───────────────────────────────────────────────────────
+
     public static void saveTimedtextRequest(Object engine, String url,
                                              Object callback, Object executor) {
         try {
             if (url != null && url.contains("timedtext")) {
                 savedEngine   = engine;
-                // Strip any existing tlang= to get the canonical base URL
                 savedBaseUrl  = url.replaceAll("[&?]tlang=[^&]*", "");
                 savedCallback = callback;
                 savedExecutor = executor;
-                android.util.Log.d("HebrewSubs", "saveTimedtextRequest: saved " + savedBaseUrl);
             }
         } catch (Exception ignored) {}
     }
 
-    /**
-     * Re-fires the last timedtext request with or without &tlang=iw
-     * depending on the current preference, causing YouTube's own callback
-     * to load the new subtitle track without any seek.
-     */
+    // ── Subtitle reload ───────────────────────────────────────────────────────
+
+    /** Called from "עב" button and from Hebrew CC panel option. */
     private static void reloadSubtitles(Context ctx) {
-        // Lazy lookup: try to find the CC button if not already found
+        // Primary: find CC button and toggle off→on to trigger fresh timedtext load
         View ccBtn = ccBtnRef.get();
         if (ccBtn == null) {
             View myBtn = btnRef.get();
             if (myBtn != null) {
                 ccBtn = findCcButtonById(myBtn.getRootView(), ctx);
-                if (ccBtn != null) {
-                    ccBtnRef = new WeakReference<>(ccBtn);
-                    android.util.Log.d("HebrewSubs", "CC button found lazily: "
-                            + ccBtn.getClass().getSimpleName() + " id=0x"
-                            + Integer.toHexString(ccBtn.getId()));
-                }
+                if (ccBtn != null) ccBtnRef = new WeakReference<>(ccBtn);
             }
         }
         if (ccBtn != null) {
-            final View finalCcBtn = ccBtn;
-            android.util.Log.d("HebrewSubs", "reloadSubtitles: toggling CC button off→on");
-            finalCcBtn.post(() -> {
-                finalCcBtn.performClick();
-                finalCcBtn.postDelayed(() -> finalCcBtn.performClick(), 250);
+            final View btn = ccBtn;
+            btn.post(() -> {
+                btn.performClick();
+                btn.postDelayed(() -> btn.performClick(), 250);
             });
         } else {
-            android.util.Log.w("HebrewSubs", "reloadSubtitles: CC button not found, falling back to Cronet replay");
             reloadSubtitlesCronet(ctx);
         }
     }
 
-    private static View findCcButtonById(View root, Context ctx) {
-        try {
-            // Primary: look up by YouTube's resource name
-            int resId = ctx.getResources().getIdentifier(
-                    "youtube_controls_overlay_subtitle_button", "id", ctx.getPackageName());
-            if (resId != 0) {
-                View v = root.findViewById(resId);
-                if (v != null) {
-                    android.util.Log.d("HebrewSubs", "CC button found by resource ID");
-                    return v;
-                }
-                android.util.Log.w("HebrewSubs", "resource ID found (0x" + Integer.toHexString(resId) + ") but view not in hierarchy");
-            } else {
-                android.util.Log.w("HebrewSubs", "youtube_controls_overlay_subtitle_button resource ID not found");
-            }
-        } catch (Exception e) {
-            android.util.Log.e("HebrewSubs", "findCcButtonById error: " + e);
-        }
-        // Fallback: search by content description
-        return searchCcButton(root, 0);
-    }
-
-    private static void reloadSubtitlesCronet(Context ctx) {
+    public static void reloadSubtitlesCronet(Context ctx) {
         try {
             if (savedEngine == null || savedBaseUrl == null
                     || savedCallback == null || savedExecutor == null) return;
@@ -121,7 +88,8 @@ public final class HebrewSubtitlesHelper {
             Method newUrlRequestBuilder = null;
             for (Method m : savedEngine.getClass().getMethods()) {
                 if ("newUrlRequestBuilder".equals(m.getName()) && m.getParameterCount() == 3) {
-                    newUrlRequestBuilder = m; break;
+                    newUrlRequestBuilder = m;
+                    break;
                 }
             }
             if (newUrlRequestBuilder == null) return;
@@ -133,20 +101,19 @@ public final class HebrewSubtitlesHelper {
         }
     }
 
-    private static void findAndSaveCcButton(View root) {
+    private static View findCcButtonById(View root, Context ctx) {
         try {
-            View found = searchCcButton(root, 0);
-            if (found != null) {
-                ccBtnRef = new WeakReference<>(found);
-                android.util.Log.d("HebrewSubs", "CC button found: "
-                        + found.getClass().getSimpleName()
-                        + " desc=" + found.getContentDescription());
-            } else {
-                android.util.Log.w("HebrewSubs", "CC button not found in hierarchy");
+            int resId = ctx.getResources().getIdentifier(
+                    "youtube_controls_overlay_subtitle_button", "id", ctx.getPackageName());
+            if (resId != 0) {
+                View v = root.findViewById(resId);
+                if (v != null) {
+                    android.util.Log.d("HebrewSubs", "CC button found by resource ID");
+                    return v;
+                }
             }
-        } catch (Exception e) {
-            android.util.Log.e("HebrewSubs", "findAndSaveCcButton failed: " + e);
-        }
+        } catch (Exception ignored) {}
+        return searchCcButton(root, 0);
     }
 
     private static View searchCcButton(View view, int depth) {
@@ -154,9 +121,8 @@ public final class HebrewSubtitlesHelper {
         CharSequence desc = view.getContentDescription();
         if (desc != null) {
             String d = desc.toString().toLowerCase();
-            if (d.contains("caption") || d.contains("subtitle") || d.contains("כתוביות")) {
+            if (d.contains("caption") || d.contains("subtitle") || d.contains("כתוביות"))
                 return view;
-            }
         }
         if (view instanceof ViewGroup) {
             ViewGroup vg = (ViewGroup) view;
@@ -168,7 +134,191 @@ public final class HebrewSubtitlesHelper {
         return null;
     }
 
-    // ── Player-button hooks ──────────────────────────────────────────────────────
+    // ── CC Panel injection (called from bytecode hook) ────────────────────────
+
+    /**
+     * Called by the patch when the captions bottom-sheet builder method runs.
+     * {@code sheetObject} is {@code this} of that method — the controller that
+     * builds/inflates the CC panel.  We post a Runnable on its first found View
+     * so injection happens after the panel is fully laid out.
+     */
+    public static void onCaptionsSheetBuilt(Object sheetObject) {
+        try {
+            // Walk the object's fields to find the first View (the panel root)
+            View panelRoot = findViewInObject(sheetObject, 0);
+            if (panelRoot == null) {
+                android.util.Log.w("HebrewSubs", "onCaptionsSheetBuilt: no View found in sheet object");
+                // Fall back to ViewTreeObserver on the window
+                return;
+            }
+            android.util.Log.d("HebrewSubs", "onCaptionsSheetBuilt: panel root = "
+                    + panelRoot.getClass().getSimpleName());
+            panelRoot.post(() -> injectIntoPanelRoot(panelRoot));
+        } catch (Exception e) {
+            android.util.Log.e("HebrewSubs", "onCaptionsSheetBuilt failed: " + e);
+        }
+    }
+
+    /** Recursively searches object fields for the first View instance (depth ≤ 3). */
+    private static View findViewInObject(Object obj, int depth) {
+        if (obj == null || depth > 3) return null;
+        if (obj instanceof View) return (View) obj;
+        try {
+            for (java.lang.reflect.Field f : obj.getClass().getDeclaredFields()) {
+                f.setAccessible(true);
+                Object val = f.get(obj);
+                if (val instanceof View) return (View) val;
+                if (val != null && depth < 2) {
+                    View found = findViewInObject(val, depth + 1);
+                    if (found != null) return found;
+                }
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    private static void injectIntoPanelRoot(View root) {
+        try {
+            if (ccPanelInjected) return;
+
+            Context ctx = root.getContext();
+
+            // Find the list container: deepest ViewGroup with ≥ 2 children
+            ViewGroup listContainer = findListContainer(root);
+            if (listContainer == null) {
+                android.util.Log.w("HebrewSubs", "injectIntoPanelRoot: list container not found");
+                logViewHierarchy(root, 0, 6);
+                return;
+            }
+
+            // Don't add twice
+            for (int i = 0; i < listContainer.getChildCount(); i++) {
+                if ("hebrew_cc_option".equals(listContainer.getChildAt(i).getTag())) return;
+            }
+
+            View item = createHebrewItem(ctx, listContainer.getMeasuredWidth());
+            // Insert before last child (typically "Auto-translate" or footer)
+            int insertAt = Math.max(0, listContainer.getChildCount() - 1);
+            listContainer.addView(item, insertAt);
+
+            ccPanelInjected = true;
+            android.util.Log.d("HebrewSubs", "Hebrew option injected at index " + insertAt
+                    + " in " + listContainer.getClass().getSimpleName());
+        } catch (Exception e) {
+            android.util.Log.e("HebrewSubs", "injectIntoPanelRoot failed: " + e);
+        }
+    }
+
+    private static ViewGroup findListContainer(View root) {
+        // BFS: find the ViewGroup with the most direct-children among candidates
+        ViewGroup best = null;
+        int bestCount = 1;
+        java.util.ArrayDeque<View> queue = new java.util.ArrayDeque<>();
+        queue.add(root);
+        while (!queue.isEmpty()) {
+            View v = queue.poll();
+            if (v instanceof ViewGroup) {
+                ViewGroup vg = (ViewGroup) v;
+                if (vg.getChildCount() > bestCount) {
+                    bestCount = vg.getChildCount();
+                    best = vg;
+                }
+                for (int i = 0; i < vg.getChildCount(); i++) queue.add(vg.getChildAt(i));
+            }
+        }
+        return best;
+    }
+
+    private static View createHebrewItem(Context ctx, int parentWidth) {
+        TextView tv = new TextView(ctx);
+        tv.setText("עברית");
+        tv.setTextColor(Color.WHITE);
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        tv.setTypeface(null, Typeface.NORMAL);
+        tv.setGravity(Gravity.CENTER_VERTICAL);
+        tv.setPadding(dp(ctx, 20), dp(ctx, 14), dp(ctx, 20), dp(ctx, 14));
+        tv.setTag("hebrew_cc_option");
+        int w = parentWidth > 0 ? parentWidth : ViewGroup.LayoutParams.MATCH_PARENT;
+        tv.setLayoutParams(new ViewGroup.LayoutParams(w, dp(ctx, 52)));
+        tv.setOnClickListener(v -> {
+            Context c = v.getContext();
+            c.getSharedPreferences(PREFS, 0).edit().putBoolean(KEY_ON, true).apply();
+            View myBtn = btnRef.get();
+            if (myBtn != null) myBtn.setAlpha(1.0f);
+            reloadSubtitlesCronet(c);
+            android.widget.Toast.makeText(c,
+                    "\u05DB\u05EA\u05D5\u05D1\u05D9\u05D5\u05EA \u05E2\u05D1\u05E8\u05D9\u05EA: \u05E4\u05E2\u05D9\u05DC",
+                    android.widget.Toast.LENGTH_SHORT).show();
+        });
+        return tv;
+    }
+
+    // ── ViewTreeObserver fallback (if bytecode hook misses) ───────────────────
+
+    private static void startCcPanelProbe(View rootView) {
+        if (probeRegistered) return;
+        probeRegistered = true;
+        try {
+            android.view.ViewTreeObserver vto = rootView.getViewTreeObserver();
+            if (!vto.isAlive()) return;
+            vto.addOnGlobalLayoutListener(() -> {
+                try { checkForCcPanelViaResource(rootView); }
+                catch (Exception ignored) {}
+            });
+        } catch (Exception e) {
+            android.util.Log.e("HebrewSubs", "startCcPanelProbe failed: " + e);
+        }
+    }
+
+    private static void checkForCcPanelViaResource(View rootView) {
+        Context ctx = rootView.getContext();
+
+        // Use bottom_sheet_footer_text (Material Design) as anchor for any bottom sheet
+        int footerResId = ctx.getResources().getIdentifier(
+                "bottom_sheet_footer_text", "id", ctx.getPackageName());
+        if (footerResId == 0) return;
+
+        View footerView = rootView.findViewById(footerResId);
+        boolean panelOpen = footerView != null && footerView.isShown();
+
+        if (!panelOpen) { ccPanelInjected = false; return; }
+        if (ccPanelInjected) return;
+
+        // Confirm it's the CC panel: footer text should match subtitle_menu_settings_footer_info
+        int strResId = ctx.getResources().getIdentifier(
+                "subtitle_menu_settings_footer_info", "string", ctx.getPackageName());
+        if (strResId != 0 && footerView instanceof TextView) {
+            String actual   = ((TextView) footerView).getText().toString();
+            String expected = ctx.getString(strResId);
+            if (!expected.isEmpty() && !actual.isEmpty()
+                    && !actual.contains(expected.substring(0, Math.min(8, expected.length())))) {
+                return; // Different bottom sheet
+            }
+        }
+
+        android.util.Log.d("HebrewSubs", "CC panel detected via ViewTreeObserver, injecting...");
+        injectIntoPanelRoot(footerView.getRootView());
+    }
+
+    // ── Logging helpers ───────────────────────────────────────────────────────
+
+    private static void logViewHierarchy(View view, int depth, int maxDepth) {
+        if (depth > maxDepth || view == null) return;
+        String indent = "  ".repeat(depth);
+        String info = indent + view.getClass().getSimpleName()
+                + "[id=" + Integer.toHexString(view.getId()) + "]";
+        if (view instanceof TextView) info += " text=\"" + ((TextView) view).getText() + "\"";
+        if (view instanceof ViewGroup) info += " children=" + ((ViewGroup) view).getChildCount();
+        android.util.Log.d("HebrewSubs", info);
+        if (view instanceof ViewGroup) {
+            ViewGroup vg = (ViewGroup) view;
+            for (int i = 0; i < vg.getChildCount(); i++) {
+                logViewHierarchy(vg.getChildAt(i), depth + 1, maxDepth);
+            }
+        }
+    }
+
+    // ── Player-button hooks ───────────────────────────────────────────────────
 
     public static void initializeButton(View controlsView) {
         try {
@@ -199,26 +349,24 @@ public final class HebrewSubtitlesHelper {
                 ctx.getSharedPreferences(PREFS, 0)
                         .edit().putBoolean(KEY_ON, nowOn).apply();
                 v.setAlpha(nowOn ? 1.0f : 0.35f);
-                // Reload subtitle track immediately using saved Cronet components
                 reloadSubtitles(ctx);
                 android.widget.Toast.makeText(
                         ctx,
                         nowOn
-                                ? "\u05DB\u05EA\u05D5\u05D1\u05D9\u05D5\u05EA \u05E2\u05D1\u05E8\u05D9\u05EA: \u05E4\u05E2\u05D9\u05DC"
-                                : "\u05DB\u05EA\u05D5\u05D1\u05D9\u05D5\u05EA \u05E2\u05D1\u05E8\u05D9\u05EA: \u05DB\u05D1\u05D5\u05D9",
+                            ? "\u05DB\u05EA\u05D5\u05D1\u05D9\u05D5\u05EA \u05E2\u05D1\u05E8\u05D9\u05EA: \u05E4\u05E2\u05D9\u05DC"
+                            : "\u05DB\u05EA\u05D5\u05D1\u05D9\u05D5\u05EA \u05E2\u05D1\u05E8\u05D9\u05EA: \u05DB\u05D1\u05D5\u05D9",
                         android.widget.Toast.LENGTH_SHORT).show();
             });
 
-            int sizePx = dp(ctx, 48);
+            int sizePx  = dp(ctx, 48);
             int marginB = dp(ctx, 80);
             int marginR = dp(ctx, 8);
 
             ViewGroup frameParent = findFrameLayout(controlsView);
-
             if (frameParent != null) {
                 FrameLayout.LayoutParams lp =
                         new FrameLayout.LayoutParams(sizePx, sizePx);
-                lp.gravity = Gravity.BOTTOM | Gravity.END;
+                lp.gravity      = Gravity.BOTTOM | Gravity.END;
                 lp.bottomMargin = marginB;
                 lp.rightMargin  = marginR;
                 btn.setLayoutParams(lp);
@@ -233,85 +381,6 @@ public final class HebrewSubtitlesHelper {
 
             btnRef = new WeakReference<>(btn);
             startCcPanelProbe(controlsView.getRootView());
-        } catch (Exception ignored) {}
-    }
-
-    // ── CC Panel Probe ────────────────────────────────────────────────────────────
-
-    private static boolean probeRegistered = false;
-
-    private static void startCcPanelProbe(View rootView) {
-        if (probeRegistered) return;
-        probeRegistered = true;
-        try {
-            android.view.ViewTreeObserver vto = rootView.getViewTreeObserver();
-            if (!vto.isAlive()) return;
-            vto.addOnGlobalLayoutListener(() -> {
-                try {
-                    scanForCcPanel(rootView, 0, new StringBuilder());
-                } catch (Exception ignored) {}
-            });
-            android.util.Log.d("HebrewSubsUI", "CC probe registered on " + rootView.getClass().getSimpleName());
-        } catch (Exception e) {
-            android.util.Log.e("HebrewSubsUI", "startCcPanelProbe failed: " + e);
-        }
-    }
-
-    private static void scanForCcPanel(View view, int depth, StringBuilder path) {
-        if (depth > 12) return;
-        String className = view.getClass().getSimpleName();
-        String newPath = path + "/" + className;
-
-        if (view instanceof android.widget.TextView) {
-            String text = ((android.widget.TextView) view).getText().toString().trim();
-            if (!text.isEmpty()) {
-                String lower = text.toLowerCase();
-                if (lower.contains("auto-translat") || lower.contains("תרגום")
-                        || lower.contains("caption") || lower.contains("subtitle")
-                        || lower.contains("כתוביות") || lower.contains("off captions")
-                        || lower.contains("english") || lower.contains("אנגלית")) {
-                    String foundMsg = "FOUND: \"" + text + "\" path=" + newPath;
-                    android.util.Log.d("HebrewSubsUI", foundMsg);
-                    appendLogFile(view.getContext(), foundMsg);
-                    logParentChain(view);
-                }
-            }
-        }
-
-        if (view instanceof ViewGroup) {
-            ViewGroup vg = (ViewGroup) view;
-            for (int i = 0; i < vg.getChildCount(); i++) {
-                scanForCcPanel(vg.getChildAt(i), depth + 1, new StringBuilder(newPath));
-            }
-        }
-    }
-
-    private static void logParentChain(View view) {
-        StringBuilder sb = new StringBuilder("  parents: ");
-        android.view.ViewParent p = view.getParent();
-        int i = 0;
-        while (p instanceof View && i < 8) {
-            View pv = (View) p;
-            sb.append(pv.getClass().getSimpleName());
-            if (p instanceof ViewGroup) sb.append("[").append(((ViewGroup) p).getChildCount()).append("]");
-            sb.append(" < ");
-            p = pv.getParent();
-            i++;
-        }
-        android.util.Log.d("HebrewSubsUI", sb.toString());
-        appendLogFile(view.getContext(), sb.toString());
-    }
-
-    // ── File logging ──────────────────────────────────────────────────────────────
-
-    static void appendLogFile(Context ctx, String msg) {
-        try {
-            java.io.File dir = ctx.getExternalFilesDir(null);
-            if (dir == null) return;
-            java.io.File f = new java.io.File(dir, "hebrew_subs_ui.log");
-            java.io.FileWriter fw = new java.io.FileWriter(f, true);
-            fw.write(System.currentTimeMillis() + " " + msg + "\n");
-            fw.close();
         } catch (Exception ignored) {}
     }
 
@@ -333,7 +402,7 @@ public final class HebrewSubtitlesHelper {
         } catch (Exception ignored) {}
     }
 
-    // ── Helpers ──────────────────────────────────────────────────────────────────
+    // ── Helpers ───────────────────────────────────────────────────────────────
 
     private static ViewGroup findFrameLayout(View from) {
         ViewGroup candidate = (from.getParent() instanceof ViewGroup)
