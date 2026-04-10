@@ -128,16 +128,16 @@ val hebrewSubtitlesPatch: Patch = bytecodePatch(
 
             // ── Injection 1: inject Hebrew footer item ────────────────────────
             //
-            // Hooked in oju.N() (onCreateView), AFTER YouTube's addFooterView.
-            // Inserting after prevents our footer from shifting the adapter
-            // item positions that YouTube uses in onItemClick.
+            // Hooked in oju.N() (onCreateView), BEFORE YouTube's addFooterView.
+            // isSelectable=false means our footer never gets a position in onItemClick,
+            // so track item positions are not affected.
             // p0 = oju instance, v$listViewReg = ListView.
             try {
                 subtitleMenuSheetFingerprint.match(subtitleSheetClassDef).method.apply {
                     val footerIdx   = indexOfAddFooterViewInstruction()
                     val listViewReg = getInstruction<FiveRegisterInstruction>(footerIdx).registerC
                     addInstruction(
-                        footerIdx + 1,
+                        footerIdx,
                         "invoke-static { p0, v$listViewReg }, $HELPER->injectHebrewOption(Ljava/lang/Object;Landroid/widget/ListView;)V",
                     )
                 }
