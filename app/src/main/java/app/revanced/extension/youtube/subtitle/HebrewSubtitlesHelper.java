@@ -7,6 +7,7 @@ import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.ImageView;
 import android.widget.ListView;
 import android.widget.TextView;
 
@@ -18,7 +19,9 @@ import java.util.List;
 
 public final class HebrewSubtitlesHelper {
 
-    private static WeakReference<Object> ojuRef = new WeakReference<>(null);
+    private static WeakReference<Object>   ojuRef        = new WeakReference<>(null);
+    private static WeakReference<View>     hebrewItemRef = new WeakReference<>(null);
+    private static WeakReference<ListView> listViewRef   = new WeakReference<>(null);
 
     /**
      * Flag set just before we trigger a track-selection call.
@@ -61,10 +64,12 @@ public final class HebrewSubtitlesHelper {
             if (listView == null) return;
             if (listView.getFooterViewsCount() > 0) return;
 
-            ojuRef = new WeakReference<>(ojuInstance);
+            ojuRef      = new WeakReference<>(ojuInstance);
+            listViewRef = new WeakReference<>(listView);
 
             Context ctx = listView.getContext();
             View item = createHebrewListItem(ctx);
+            hebrewItemRef = new WeakReference<>(item);
             listView.addFooterView(item, null, false);
             android.util.Log.d("HebrewSubs", "Hebrew option injected");
         } catch (Exception e) {
@@ -138,6 +143,93 @@ public final class HebrewSubtitlesHelper {
         }
     }
 
+    /**
+     * Called after Hebrew is successfully selected.
+     * 1. Shows checkmark on our item, clears checkmarks on native items.
+     * 2. Dismisses the bottom sheet.
+     */
+    private static void onHebrewSelected() {
+        // --- checkmark ---
+        View hebrewItem = hebrewItemRef.get();
+        ListView lv = listViewRef.get();
+
+        if (hebrewItem != null) {
+            ImageView check = findFirstImageView(hebrewItem);
+            if (check != null) {
+                check.setVisibility(View.VISIBLE);
+                android.util.Log.d("HebrewSubs", "checkmark shown on Hebrew item");
+            } else {
+                android.util.Log.w("HebrewSubs", "checkmark ImageView not found in Hebrew item");
+            }
+        }
+
+        if (lv != null) {
+            // Clear checkmarks from all native list items (non-footer)
+            int cleared = 0;
+            for (int i = 0; i < lv.getChildCount(); i++) {
+                View child = lv.getChildAt(i);
+                if (child == hebrewItem) continue;
+                cleared += setAllImageViewsInvisible(child);
+            }
+            android.util.Log.d("HebrewSubs", "cleared checkmarks in " + cleared + " native views");
+        }
+
+        // --- dismiss bottom sheet ---
+        Object oju = ojuRef.get();
+        if (oju != null) {
+            try {
+                Method dismiss = findMethodInHierarchy(oju.getClass(), "dismissAllowingStateLoss");
+                if (dismiss == null) dismiss = findMethodInHierarchy(oju.getClass(), "dismiss");
+                if (dismiss != null) {
+                    dismiss.invoke(oju);
+                    android.util.Log.d("HebrewSubs", "bottom sheet dismissed via " + dismiss.getName());
+                } else {
+                    android.util.Log.w("HebrewSubs", "dismiss method not found on " + oju.getClass().getName());
+                }
+            } catch (Exception e) {
+                android.util.Log.w("HebrewSubs", "dismiss failed: " + e);
+            }
+        }
+    }
+
+    private static ImageView findFirstImageView(View v) {
+        if (v instanceof ImageView) return (ImageView) v;
+        if (v instanceof ViewGroup) {
+            ViewGroup vg = (ViewGroup) v;
+            for (int i = 0; i < vg.getChildCount(); i++) {
+                ImageView found = findFirstImageView(vg.getChildAt(i));
+                if (found != null) return found;
+            }
+        }
+        return null;
+    }
+
+    private static int setAllImageViewsInvisible(View v) {
+        int count = 0;
+        if (v instanceof ImageView) {
+            if (v.getVisibility() == View.VISIBLE) {
+                v.setVisibility(View.INVISIBLE);
+                count++;
+            }
+        } else if (v instanceof ViewGroup) {
+            ViewGroup vg = (ViewGroup) v;
+            for (int i = 0; i < vg.getChildCount(); i++)
+                count += setAllImageViewsInvisible(vg.getChildAt(i));
+        }
+        return count;
+    }
+
+    private static Method findMethodInHierarchy(Class<?> cls, String name) {
+        for (Class<?> c = cls; c != null && c != Object.class; c = c.getSuperclass()) {
+            try {
+                Method m = c.getDeclaredMethod(name);
+                m.setAccessible(true);
+                return m;
+            } catch (NoSuchMethodException ignored) {}
+        }
+        return null;
+    }
+
     // ── Core selection logic ──────────────────────────────────────────────────
 
     /**
@@ -181,6 +273,7 @@ public final class HebrewSubtitlesHelper {
                 try {
                     aMethod.invoke(alis, hebrewTrack);
                     android.util.Log.d("HebrewSubs", "alis.a(hebrewTrack) ok");
+                    onHebrewSelected();
                     return true;
                 } catch (InvocationTargetException e) {
                     Throwable cause = e.getCause();
@@ -199,6 +292,7 @@ public final class HebrewSubtitlesHelper {
                 try {
                     qMethod.invoke(alxc, hebrewTrack);
                     android.util.Log.d("HebrewSubs", "alxc.Q(hebrewTrack) ok");
+                    onHebrewSelected();
                     return true;
                 } catch (InvocationTargetException e) {
                     android.util.Log.w("HebrewSubs", "alxc.Q() threw: " + e.getCause());
