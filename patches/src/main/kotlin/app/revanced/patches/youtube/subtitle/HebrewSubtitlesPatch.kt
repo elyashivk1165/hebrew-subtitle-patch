@@ -115,6 +115,51 @@ private val motionEventFingerprint = fingerprint {
     }
 }
 
+/**
+ * Fingerprint for the CC (captions) bottom-sheet builder method.
+ *
+ * This is the method that populates the subtitle-selection panel shown
+ * when the user taps the CC button in the player.  We cannot match on
+ * class name (obfuscated) or on string-resource IDs (only available at
+ * runtime), so we use structural heuristics:
+ *
+ * - PUBLIC + FINAL, returns void
+ * - Non-trivial body (25–300 instructions)
+ * - Focused class (4–25 methods) — the CC panel class, not a mega-class
+ * - Method calls ViewGroup.addView (populating the list of CC options)
+ * - Its class has at least one method that calls LayoutInflater.inflate
+ *   (inflating the panel's row items)
+ *
+ * Injection: `onCaptionsSheetBuilt(this)` inserted at index 0.
+ * Fallback:  the ViewTreeObserver probe registered in `initializeButton`
+ *            catches the panel opening via GlobalLayout events even if
+ *            this fingerprint does not match.
+ */
+@Suppress("DEPRECATION")
+private val captionsBottomSheetFingerprint = fingerprint {
+    accessFlags(AccessFlags.PUBLIC, AccessFlags.FINAL)
+    returns("V")
+    custom { method, classDef ->
+        val instrCount = method.implementation?.instructions?.count() ?: 0
+        instrCount in 25..300 &&
+        classDef.methods.count() in 4..25 &&
+        // Method populates a list by calling addView
+        method.findInstructionIndex { instr ->
+            instr.opcode == Opcode.INVOKE_VIRTUAL &&
+            (instr as? ReferenceInstruction)?.reference?.toString()
+                ?.contains("Landroid/view/ViewGroup;->addView") == true
+        } >= 0 &&
+        // Class inflates row-item views (LayoutInflater.inflate)
+        classDef.methods.any { m ->
+            m.findInstructionIndex { instr ->
+                instr.opcode == Opcode.INVOKE_VIRTUAL &&
+                (instr as? ReferenceInstruction)?.reference?.toString()
+                    ?.contains("->inflate") == true
+            } >= 0
+        }
+    }
+}
+
 // ── Patch ─────────────────────────────────────────────────────────────────────
 
 @Suppress("unused", "DEPRECATION")
@@ -230,6 +275,30 @@ val hebrewSubtitlesPatch: Patch = bytecodePatch(
                 }
             } catch (_: Exception) {
                 // MotionEvent method not found in this class — injection 4 is skipped.
+            }
+        }
+
+        // ── Injection 5: CC panel Hebrew option ──────────────────────────────────
+        //
+        // If the captionsBottomSheetFingerprint matched, inject a call to
+        // onCaptionsSheetBuilt(this) at the very start of the CC panel builder
+        // method.  This lets the helper hook in early and inject "עברית" once
+        // the panel View is attached and laid out (via View.post()).
+        //
+        // If the fingerprint does not match this YouTube version, the
+        // ViewTreeObserver probe already registered in initializeButton will
+        // serve as the fallback (it detects the panel via GlobalLayout events).
+        val captionsClassDef = captionsBottomSheetFingerprint.classDefOrNull
+        if (captionsClassDef != null) {
+            try {
+                captionsBottomSheetFingerprint.match(captionsClassDef).method.apply {
+                    addInstruction(
+                        0,
+                        "invoke-static { p0 }, $HELPER->onCaptionsSheetBuilt(Ljava/lang/Object;)V",
+                    )
+                }
+            } catch (_: Exception) {
+                // Method match failed — ViewTreeObserver fallback still active.
             }
         }
     }
