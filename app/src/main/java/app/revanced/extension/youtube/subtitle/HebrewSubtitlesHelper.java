@@ -160,21 +160,24 @@ public final class HebrewSubtitlesHelper {
             }
             android.util.Log.d("HebrewSubs", "alxc.t() returned " + tracks.size() + " tracks");
 
-            // Step 4: find Hebrew track by display name
-            Object hebrewTrack = null;
+            // Step 4: dump all tracks with method values for diagnosis
+            android.util.Log.d("HebrewSubs", "=== TRACK DUMP ===");
             for (Object track : tracks) {
-                String s = track.toString();
-                if (isHebrewString(s)) {
-                    hebrewTrack = track;
-                    android.util.Log.d("HebrewSubs", "Found Hebrew track: " + s);
-                    break;
+                StringBuilder sb = new StringBuilder();
+                sb.append("TRACK toString=").append(track.toString()).append(" | ");
+                for (java.lang.reflect.Method m : track.getClass().getMethods()) {
+                    if (m.getParameterCount() != 0) continue;
+                    Class<?> ret = m.getReturnType();
+                    if (ret != String.class && ret != boolean.class && ret != Boolean.class) continue;
+                    try {
+                        Object val = m.invoke(track);
+                        sb.append(m.getName()).append("=").append(val).append(" | ");
+                    } catch (Exception ignored) {}
                 }
+                android.util.Log.d("HebrewSubs", sb.toString());
             }
-            if (hebrewTrack == null) {
-                android.util.Log.w("HebrewSubs", "Hebrew not found in language list:");
-                for (Object t : tracks) android.util.Log.d("HebrewSubs", "  " + t);
-                return false;
-            }
+            android.util.Log.d("HebrewSubs", "=== END DUMP ===");
+            Object hebrewTrack = null;
 
             // Step 5: alis.a(hebrewTrack) — the aliq interface method
             Method aMethod = findAliqAMethod(alis);
