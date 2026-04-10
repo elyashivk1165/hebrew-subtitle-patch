@@ -35,12 +35,23 @@ public final class HebrewSubtitlesHelper {
     }
 
     public static String interceptTimedtextUrl(String url) {
+        if (url != null && url.contains("timedtext")) {
+            android.util.Log.d("HebrewSubs", "interceptor called, pending=" + hebrewPending
+                    + " tlang=" + extractTlang(url));
+        }
         if (hebrewPending && url != null && url.contains("&tlang=")) {
             hebrewPending = false;
             url = url.replaceFirst("&tlang=[^&]*", "&tlang=iw");
-            android.util.Log.d("HebrewSubs", "URL swapped → tlang=iw");
+            android.util.Log.d("HebrewSubs", "URL swapped → " + url.substring(url.lastIndexOf("&tlang=")));
         }
         return url;
+    }
+
+    private static String extractTlang(String url) {
+        int i = url.indexOf("&tlang=");
+        if (i < 0) return "none";
+        int j = url.indexOf('&', i + 1);
+        return j < 0 ? url.substring(i + 7) : url.substring(i + 7, j);
     }
 
     // ── CC Panel injection ────────────────────────────────────────────────────
@@ -172,7 +183,14 @@ public final class HebrewSubtitlesHelper {
                     android.util.Log.d("HebrewSubs", "alis.a(hebrewTrack) ok");
                     return true;
                 } catch (InvocationTargetException e) {
-                    android.util.Log.w("HebrewSubs", "alis.a() threw: " + e.getCause());
+                    Throwable cause = e.getCause();
+                    android.util.Log.w("HebrewSubs", "alis.a() threw: " + cause);
+                    if (cause != null) {
+                        for (StackTraceElement el : cause.getStackTrace()) {
+                            android.util.Log.w("HebrewSubs", "  at " + el);
+                            if (el.toString().contains("alxc") || el.toString().contains("alis")) break;
+                        }
+                    }
                 }
             }
 
@@ -204,15 +222,37 @@ public final class HebrewSubtitlesHelper {
      */
     private static Object cloneWithLang(Object track, String langCode) {
         try {
-            Method s = track.getClass().getMethod("s", String.class);
+            // Try public method first, then declared (private)
+            Method s;
+            try {
+                s = track.getClass().getMethod("s", String.class);
+            } catch (NoSuchMethodException e) {
+                s = track.getClass().getDeclaredMethod("s", String.class);
+                s.setAccessible(true);
+            }
             Object copy = s.invoke(track, langCode);
-            android.util.Log.d("HebrewSubs", "cloneWithLang(" + langCode + ") → g="
-                    + getLanguageCode(copy));
+            String origUrl = getTrackUrl(track);
+            String copyUrl = getTrackUrl(copy);
+            android.util.Log.d("HebrewSubs", "cloneWithLang(" + langCode + ") g=" + getLanguageCode(copy));
+            android.util.Log.d("HebrewSubs", "  orig URL tail: " + urlTail(origUrl));
+            android.util.Log.d("HebrewSubs", "  copy URL tail: " + urlTail(copyUrl));
             return copy;
         } catch (Exception e) {
             android.util.Log.w("HebrewSubs", "cloneWithLang failed: " + e);
             return null;
         }
+    }
+
+    private static String getTrackUrl(Object track) {
+        try {
+            return (String) track.getClass().getMethod("l").invoke(track);
+        } catch (Exception ignored) { return "?"; }
+    }
+
+    private static String urlTail(String url) {
+        if (url == null) return "null";
+        int i = url.indexOf("&lang=");
+        return i >= 0 ? url.substring(i) : url;
     }
 
     // ── Reflection helpers ────────────────────────────────────────────────────
