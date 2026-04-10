@@ -209,7 +209,8 @@ public final class HebrewSubtitlesHelper {
             Field f = obj.getClass().getDeclaredField(name);
             f.setAccessible(true);
             return f.get(obj);
-        } catch (NoSuchFieldException ignored) {}
+        } catch (NoSuchFieldException ignored) {
+        } catch (Exception ignored) {}
         // Walk superclass chain
         for (Class<?> c = obj.getClass().getSuperclass();
              c != null && c != Object.class; c = c.getSuperclass()) {
