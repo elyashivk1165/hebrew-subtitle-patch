@@ -131,81 +131,87 @@ public final class HebrewSubtitlesHelper {
 
     /**
      * Strategy: Hebrew is not in alxc.t() for most videos.
-     * Instead we take any track from the list and use it to trigger YouTube's
-     * native track-selection flow (which builds a fresh Cronet request with a
-     * fresh callback).  Just before the request leaves, interceptTimedtextUrl()
-     * swaps &tlang=XX → &tlang=iw, so YouTube fetches Hebrew subtitles.
+     * We take any track from the list, clone it with language code "iw" via
+     * SubtitleTrack.s("iw"), then pass the clone to alis.a() so YouTube selects
+     * Hebrew natively.  If s() doesn't update the stored URL, the URL interceptor
+     * (hebrewPending flag) acts as a safety net.
      */
     private static boolean selectHebrew() {
         try {
             Object oju = ojuRef.get();
-            if (oju == null) {
-                android.util.Log.w("HebrewSubs", "no oju ref");
-                return false;
-            }
+            if (oju == null) { android.util.Log.w("HebrewSubs", "no oju ref"); return false; }
 
-            // Step 1: oju.al → alis
             Object alis = getDeclaredFieldValue(oju, "al");
-            if (alis == null) {
-                android.util.Log.w("HebrewSubs", "oju.al is null");
-                return false;
-            }
+            if (alis == null) { android.util.Log.w("HebrewSubs", "oju.al is null"); return false; }
 
-            // Step 2: find alxc — field in alis whose class has t()→List
             Object alxc = findAlxc(alis);
-            if (alxc == null) {
-                android.util.Log.w("HebrewSubs", "alxc not found");
-                return false;
-            }
+            if (alxc == null) { android.util.Log.w("HebrewSubs", "alxc not found"); return false; }
 
-            // Step 3: alxc.t() → language list — grab any track as a trigger
             Method tMethod = alxc.getClass().getMethod("t");
             @SuppressWarnings("unchecked")
             List<Object> tracks = (List<Object>) tMethod.invoke(alxc);
             if (tracks == null || tracks.isEmpty()) {
-                android.util.Log.w("HebrewSubs", "alxc.t() returned empty");
-                return false;
+                android.util.Log.w("HebrewSubs", "alxc.t() returned empty"); return false;
             }
-            Object triggerTrack = tracks.get(0);
-            android.util.Log.d("HebrewSubs", "trigger track: g=" + getLanguageCode(triggerTrack));
 
-            // Step 4: arm the URL interceptor BEFORE triggering the request
+            // Clone any track with language code "iw" via SubtitleTrack.s(String)
+            Object hebrewTrack = cloneWithLang(tracks.get(0), "iw");
+            if (hebrewTrack == null) {
+                android.util.Log.w("HebrewSubs", "s(iw) failed, using URL-swap fallback");
+                hebrewTrack = tracks.get(0);
+            }
+            android.util.Log.d("HebrewSubs", "selected track: g=" + getLanguageCode(hebrewTrack));
+
+            // Arm URL interceptor as safety net (in case stored URL is used as-is)
             hebrewPending = true;
 
-            // Step 5a: try alis.a(triggerTrack) — YouTube's native interface
             Method aMethod = findAliqAMethod(alis);
             if (aMethod != null) {
                 try {
-                    android.util.Log.d("HebrewSubs", "calling alis." + aMethod.getName() + "()");
-                    aMethod.invoke(alis, triggerTrack);
-                    android.util.Log.d("HebrewSubs", "alis.a() ok — waiting for URL intercept");
+                    aMethod.invoke(alis, hebrewTrack);
+                    android.util.Log.d("HebrewSubs", "alis.a(hebrewTrack) ok");
                     return true;
                 } catch (InvocationTargetException e) {
                     android.util.Log.w("HebrewSubs", "alis.a() threw: " + e.getCause());
                 }
             }
 
-            // Step 5b: fallback — alxc.Q(triggerTrack) directly
             Method qMethod = findSubtitleTrackMethod(alxc);
             if (qMethod != null) {
                 try {
-                    android.util.Log.d("HebrewSubs", "calling alxc." + qMethod.getName() + "()");
-                    qMethod.invoke(alxc, triggerTrack);
-                    android.util.Log.d("HebrewSubs", "alxc.Q() ok — waiting for URL intercept");
+                    qMethod.invoke(alxc, hebrewTrack);
+                    android.util.Log.d("HebrewSubs", "alxc.Q(hebrewTrack) ok");
                     return true;
                 } catch (InvocationTargetException e) {
                     android.util.Log.w("HebrewSubs", "alxc.Q() threw: " + e.getCause());
                 }
             }
 
-            hebrewPending = false; // nothing fired — disarm
-            android.util.Log.w("HebrewSubs", "no method triggered a request");
+            hebrewPending = false;
+            android.util.Log.w("HebrewSubs", "no method worked");
             return false;
 
         } catch (Exception e) {
             hebrewPending = false;
             android.util.Log.e("HebrewSubs", "selectHebrew failed: " + e);
             return false;
+        }
+    }
+
+    /**
+     * Creates a copy of the given SubtitleTrack with language code set to langCode
+     * by calling SubtitleTrack.s(String).  Returns null if the method is unavailable.
+     */
+    private static Object cloneWithLang(Object track, String langCode) {
+        try {
+            Method s = track.getClass().getMethod("s", String.class);
+            Object copy = s.invoke(track, langCode);
+            android.util.Log.d("HebrewSubs", "cloneWithLang(" + langCode + ") → g="
+                    + getLanguageCode(copy));
+            return copy;
+        } catch (Exception e) {
+            android.util.Log.w("HebrewSubs", "cloneWithLang failed: " + e);
+            return null;
         }
     }
 
