@@ -75,14 +75,10 @@ public final class HebrewSubtitlesHelper {
             android.util.Log.d("HebrewSubs", "Hebrew option injected");
 
             if (hebrewSelected) {
-                // restore checkmark state from previous selection
+                // Show our checkmark only — do NOT touch native items here,
+                // as hiding their ImageViews causes YouTube to reset subtitle state.
                 ImageView check = findFirstImageView(item);
                 if (check != null) check.setVisibility(View.VISIBLE);
-                // clear native items (they're added before our footer)
-                for (int i = 0; i < listView.getChildCount(); i++) {
-                    View child = listView.getChildAt(i);
-                    if (child != item) setAllImageViewsInvisible(child);
-                }
             }
         } catch (Exception e) {
             android.util.Log.e("HebrewSubs", "injectHebrewOption failed: " + e);
