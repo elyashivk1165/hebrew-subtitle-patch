@@ -233,11 +233,11 @@ public final class HebrewSubtitlesHelper {
     // ── Core selection logic ──────────────────────────────────────────────────
 
     /**
-     * Strategy: Hebrew is not in alxc.t() for most videos.
-     * We take any track from the list, clone it with language code "iw" via
-     * SubtitleTrack.s("iw"), then pass the clone to alis.a() so YouTube selects
-     * Hebrew natively.  If s() doesn't update the stored URL, the URL interceptor
-     * (hebrewPending flag) acts as a safety net.
+     * Strategy:
+     *  1. Brute-force: try every single-String-param method that returns a SubtitleTrack
+     *     and check if the result has g()=="iw".
+     *  2. Field modification: directly set fields g/l/n in the track object via reflection.
+     *  3. URL interceptor (hebrewPending) as last-resort safety net.
      */
     private static boolean selectHebrew() {
         try {
@@ -257,18 +257,27 @@ public final class HebrewSubtitlesHelper {
                 android.util.Log.w("HebrewSubs", "alxc.t() returned empty"); return false;
             }
 
-            // Use first track as trigger — URL interceptor swaps tlang=XX → tlang=iw
-            Object hebrewTrack = tracks.get(0);
-            android.util.Log.d("HebrewSubs", "trigger track: g=" + getLanguageCode(hebrewTrack));
+            Object triggerTrack = tracks.get(0);
+            android.util.Log.d("HebrewSubs", "trigger track: g=" + getLanguageCode(triggerTrack));
 
-            // Arm URL interceptor as safety net (in case stored URL is used as-is)
+            // Step 1: brute-force clone
+            Object hebrewTrack = findAndCloneWithLang(triggerTrack, "iw");
+            if (hebrewTrack != null && "iw".equals(getLanguageCode(hebrewTrack))) {
+                android.util.Log.d("HebrewSubs", "clone ok: g=iw");
+            } else {
+                // Step 2: modify fields directly
+                hebrewTrack = tryModifyTrackFields(triggerTrack, "iw");
+                android.util.Log.d("HebrewSubs", "field-mod track: g=" + getLanguageCode(hebrewTrack));
+            }
+
+            // Step 3: URL interceptor backup
             hebrewPending = true;
 
             Method aMethod = findAliqAMethod(alis);
             if (aMethod != null) {
                 try {
                     aMethod.invoke(alis, hebrewTrack);
-                    android.util.Log.d("HebrewSubs", "alis.a(hebrewTrack) ok");
+                    android.util.Log.d("HebrewSubs", "alis.a() ok");
                     onHebrewSelected();
                     return true;
                 } catch (InvocationTargetException e) {
@@ -287,7 +296,7 @@ public final class HebrewSubtitlesHelper {
             if (qMethod != null) {
                 try {
                     qMethod.invoke(alxc, hebrewTrack);
-                    android.util.Log.d("HebrewSubs", "alxc.Q(hebrewTrack) ok");
+                    android.util.Log.d("HebrewSubs", "alxc.Q() ok");
                     onHebrewSelected();
                     return true;
                 } catch (InvocationTargetException e) {
@@ -307,42 +316,68 @@ public final class HebrewSubtitlesHelper {
     }
 
     /**
-     * Creates a copy of the given SubtitleTrack with language code set to langCode
-     * by calling SubtitleTrack.s(String).  Returns null if the method is unavailable.
+     * Brute-force: tries every declared method on the track that takes a single
+     * String param and returns the same type.  Returns the copy if g()=="iw".
      */
-    private static Object cloneWithLang(Object track, String langCode) {
-        try {
-            // Try public method first, then declared (private)
-            Method s;
+    private static Object findAndCloneWithLang(Object track, String lang) {
+        for (Method m : track.getClass().getDeclaredMethods()) {
+            if (m.getParameterCount() != 1) continue;
+            if (m.getParameterTypes()[0] != String.class) continue;
+            if (!m.getReturnType().isInstance(track)) continue;
+            m.setAccessible(true);
             try {
-                s = track.getClass().getMethod("s", String.class);
-            } catch (NoSuchMethodException e) {
-                s = track.getClass().getDeclaredMethod("s", String.class);
-                s.setAccessible(true);
-            }
-            Object copy = s.invoke(track, langCode);
-            String origUrl = getTrackUrl(track);
-            String copyUrl = getTrackUrl(copy);
-            android.util.Log.d("HebrewSubs", "cloneWithLang(" + langCode + ") g=" + getLanguageCode(copy));
-            android.util.Log.d("HebrewSubs", "  orig URL tail: " + urlTail(origUrl));
-            android.util.Log.d("HebrewSubs", "  copy URL tail: " + urlTail(copyUrl));
-            return copy;
-        } catch (Exception e) {
-            android.util.Log.w("HebrewSubs", "cloneWithLang failed: " + e);
-            return null;
+                Object copy = m.invoke(track, lang);
+                String code = getLanguageCode(copy);
+                android.util.Log.d("HebrewSubs", "clone method " + m.getName() + "(" + lang + ") → g=" + code);
+                if (lang.equals(code)) return copy;
+            } catch (Exception ignored) {}
         }
+        return null;
     }
 
-    private static String getTrackUrl(Object track) {
+    /**
+     * Directly modifies fields g (lang code), l (URL) and n (track id) in the
+     * AutoValue_SubtitleTrack via reflection.  Works in-place and returns the
+     * same object (modified).
+     */
+    private static Object tryModifyTrackFields(Object track, String lang) {
+        String origLang = getLanguageCode(track);
+        // field g — language code
         try {
-            return (String) track.getClass().getMethod("l").invoke(track);
-        } catch (Exception ignored) { return "?"; }
+            Field f = findFieldInHierarchy(track.getClass(), "g");
+            if (f != null) { f.setAccessible(true); f.set(track, lang); }
+        } catch (Exception e) { android.util.Log.w("HebrewSubs", "field g mod: " + e); }
+        // field l — URL
+        try {
+            Field f = findFieldInHierarchy(track.getClass(), "l");
+            if (f != null) {
+                f.setAccessible(true);
+                String url = (String) f.get(track);
+                if (url != null && url.contains("&tlang=")) {
+                    f.set(track, url.replaceFirst("&tlang=[^&]*", "&tlang=" + lang));
+                }
+            }
+        } catch (Exception e) { android.util.Log.w("HebrewSubs", "field l mod: " + e); }
+        // field n — track id (e.g. t.en-US.uk → t.en-US.iw)
+        try {
+            Field f = findFieldInHierarchy(track.getClass(), "n");
+            if (f != null) {
+                f.setAccessible(true);
+                String id = (String) f.get(track);
+                if (id != null && origLang != null && id.contains(origLang)) {
+                    f.set(track, id.replace(origLang, lang));
+                }
+            }
+        } catch (Exception e) { android.util.Log.w("HebrewSubs", "field n mod: " + e); }
+        android.util.Log.d("HebrewSubs", "after field mods: g=" + getLanguageCode(track));
+        return track;
     }
 
-    private static String urlTail(String url) {
-        if (url == null) return "null";
-        int i = url.indexOf("&lang=");
-        return i >= 0 ? url.substring(i) : url;
+    private static Field findFieldInHierarchy(Class<?> cls, String name) {
+        for (Class<?> c = cls; c != null && c != Object.class; c = c.getSuperclass()) {
+            try { return c.getDeclaredField(name); } catch (NoSuchFieldException ignored) {}
+        }
+        return null;
     }
 
     // ── Reflection helpers ────────────────────────────────────────────────────
