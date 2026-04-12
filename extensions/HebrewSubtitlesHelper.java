@@ -28,7 +28,8 @@ public final class HebrewSubtitlesHelper {
      * The URL interceptor watches for this and swaps &tlang=XX → &tlang=iw
      * on the very next timedtext request YouTube builds.
      */
-    private static volatile boolean hebrewPending = false;
+    private static volatile boolean hebrewPending  = false;
+    private static volatile boolean hebrewSelected = false;
 
     // ── URL interceptor ───────────────────────────────────────────────────────
 
@@ -72,6 +73,17 @@ public final class HebrewSubtitlesHelper {
             hebrewItemRef = new WeakReference<>(item);
             listView.addFooterView(item, null, false);
             android.util.Log.d("HebrewSubs", "Hebrew option injected");
+
+            if (hebrewSelected) {
+                // restore checkmark state from previous selection
+                ImageView check = findFirstImageView(item);
+                if (check != null) check.setVisibility(View.VISIBLE);
+                // clear native items (they're added before our footer)
+                for (int i = 0; i < listView.getChildCount(); i++) {
+                    View child = listView.getChildAt(i);
+                    if (child != item) setAllImageViewsInvisible(child);
+                }
+            }
         } catch (Exception e) {
             android.util.Log.e("HebrewSubs", "injectHebrewOption failed: " + e);
         }
@@ -149,6 +161,7 @@ public final class HebrewSubtitlesHelper {
      * 2. Dismisses the bottom sheet.
      */
     private static void onHebrewSelected() {
+        hebrewSelected = true;
         // --- checkmark ---
         View hebrewItem = hebrewItemRef.get();
         ListView lv = listViewRef.get();
@@ -304,12 +317,14 @@ public final class HebrewSubtitlesHelper {
                 }
             }
 
-            hebrewPending = false;
+            hebrewPending  = false;
+            hebrewSelected = false;
             android.util.Log.w("HebrewSubs", "no method worked");
             return false;
 
         } catch (Exception e) {
-            hebrewPending = false;
+            hebrewPending  = false;
+            hebrewSelected = false;
             android.util.Log.e("HebrewSubs", "selectHebrew failed: " + e);
             return false;
         }
