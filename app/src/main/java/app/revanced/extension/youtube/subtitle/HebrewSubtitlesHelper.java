@@ -257,13 +257,9 @@ public final class HebrewSubtitlesHelper {
                 android.util.Log.w("HebrewSubs", "alxc.t() returned empty"); return false;
             }
 
-            // Clone any track with language code "iw" via SubtitleTrack.s(String)
-            Object hebrewTrack = cloneWithLang(tracks.get(0), "iw");
-            if (hebrewTrack == null) {
-                android.util.Log.w("HebrewSubs", "s(iw) failed, using URL-swap fallback");
-                hebrewTrack = tracks.get(0);
-            }
-            android.util.Log.d("HebrewSubs", "selected track: g=" + getLanguageCode(hebrewTrack));
+            // Use first track as trigger — URL interceptor swaps tlang=XX → tlang=iw
+            Object hebrewTrack = tracks.get(0);
+            android.util.Log.d("HebrewSubs", "trigger track: g=" + getLanguageCode(hebrewTrack));
 
             // Arm URL interceptor as safety net (in case stored URL is used as-is)
             hebrewPending = true;
