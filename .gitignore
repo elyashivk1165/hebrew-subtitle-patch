@@ -1,0 +1,12 @@
+# Build artifacts
+.gradle/
+build/
+extensions/out/
+patches/src/main/resources/
+
+# Local tooling / scratch (used for local dex hotswap experiments)
+.tools/
+.work/
+_*.png
+_*.xml
+_*.js
