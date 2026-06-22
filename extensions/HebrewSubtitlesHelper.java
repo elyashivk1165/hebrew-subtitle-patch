@@ -15,34 +15,36 @@ import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.util.List;
 
 /**
- * Adds a "Hebrew (auto-translate)" option to YouTube's CC bottom sheet.
+ * Adds a "Hebrew (auto-translate)" option to YouTube's CC bottom sheet that
+ * drives YouTube's OWN native auto-translation, so Hebrew subtitles render and
+ * persist exactly like the built-in "Auto-translate → <language>" menu.
  *
- * Design (deliberately simple to stay robust across YouTube/R8 versions):
+ * How it works:
  *
- *   1. We NEVER build or clone a SubtitleTrack object. Cloning YouTube's
- *      internal AutoValue track via reflection was the root cause of every
- *      recurring bug (selection silently failing, the original track getting
- *      corrupted so subtitles broke after fullscreen, wrong checkmark).
+ *   1. We take a real caption track from the subtitle controller (alxc.t()).
  *
- *   2. When the user taps our option we hand YouTube ONE OF ITS OWN existing
- *      tracks back to its own selection method. YouTube can never reject its
- *      own object, so selection always succeeds and no internal state is
- *      corrupted.
+ *   2. We call that track's own translate-builder method — SubtitleTrack.t(lang)
+ *      — with "iw". This is the exact method YouTube itself uses for native
+ *      auto-translation: it returns a proper translated SubtitleTrack (a copy of
+ *      the base track with the translation-language field set and the
+ *      "is translated" flag = true). We never clone or mutate anything by hand.
  *
- *   3. That selection makes YouTube fetch a `timedtext` URL. Our Cronet URL
- *      interceptor forces `&tlang=iw` (appending it when absent), which triggers
- *      Google's server-side auto-translation to Hebrew. The rewrite is STICKY:
- *      it applies to every timedtext request while Hebrew is active, so the
- *      subtitles survive fullscreen / seek / quality-change re-fetches instead
- *      of reverting after the first request.
+ *   3. We hand that translated track to YouTube's own selection method,
+ *      alis.a(). Because the object was built by YouTube's own builder, the
+ *      whole native pipeline works: the timedtext request is built with
+ *      &tlang=iw, the captions render, and they persist across fullscreen, seek
+ *      and quality changes — with NO URL interception.
  *
- *   4. We show our own checkmark + a toast and dismiss the sheet. We do NOT
- *      fight YouTube's native checkmark rendering — a cosmetic mismatch on the
- *      base track is acceptable and trying to suppress it caused most of the
- *      churn in this file's history.
+ *   4. We mark our own footer item and dismiss the sheet; we do not fight
+ *      YouTube's native checkmark rendering.
+ *
+ * The single-letter method names (t, a, g) are obfuscated and change between
+ * versions, so every lookup is by SIGNATURE/shape, not by name — which survives
+ * R8 renaming. The class name SubtitleTrack itself is not obfuscated.
  */
 public final class HebrewSubtitlesHelper {
 
@@ -61,11 +63,7 @@ public final class HebrewSubtitlesHelper {
     private static WeakReference<View>     hebrewItemRef = new WeakReference<>(null);
     private static WeakReference<ListView> listViewRef   = new WeakReference<>(null);
 
-    /**
-     * Set just before we trigger a track-selection call. The URL interceptor
-     * watches for this and forces &tlang=iw on the next timedtext request.
-     */
-    private static volatile boolean hebrewPending  = false;
+    /** True once the user has activated Hebrew, so we can restore the checkmark. */
     private static volatile boolean hebrewSelected = false;
 
     // ── URL interceptor ───────────────────────────────────────────────────────
@@ -76,31 +74,12 @@ public final class HebrewSubtitlesHelper {
     }
 
     public static String interceptTimedtextUrl(String url) {
-        if (url == null || !url.contains("timedtext")) return url;
-
-        // STICKY: force Hebrew on EVERY timedtext request while Hebrew is the
-        // active choice — not just the first one. YouTube re-fetches this URL
-        // after fullscreen, seeking, or a quality change; rewriting only the
-        // first request was the root cause of "subtitles revert after
-        // fullscreen". hebrewPending covers the very first request (fired before
-        // hebrewSelected is observed); hebrewSelected keeps every later one.
-        if (!hebrewSelected && !hebrewPending) {
-            return url;
-        }
-        hebrewPending = false;
-
-        String swapped;
-        if (url.contains("&tlang=")) {
-            swapped = url.replaceFirst("&tlang=[^&]*", "&tlang=iw");
-        } else if (url.contains("tlang=")) {
-            // tlang present as the first query param ("?tlang=..")
-            swapped = url.replaceFirst("([?&])tlang=[^&]*", "$1tlang=iw");
-        } else {
-            // No translation param at all — append one to trigger auto-translate.
-            swapped = url + "&tlang=iw";
-        }
-        android.util.Log.d(TAG, "timedtext forced to tlang=iw (sticky=" + hebrewSelected + ")");
-        return swapped;
+        // No-op pass-through. We no longer rewrite URLs: Hebrew is now produced
+        // the NATIVE way — by building a real translated SubtitleTrack via
+        // SubtitleTrack.t(lang) (see selectHebrew). YouTube then builds the
+        // correct &tlang=iw timedtext URL itself and renders it natively, so
+        // URL interception is unnecessary. Kept only for hook compatibility.
+        return url;
     }
 
     // ── CC Panel injection ────────────────────────────────────────────────────
@@ -250,13 +229,22 @@ public final class HebrewSubtitlesHelper {
     // ── Core selection logic ──────────────────────────────────────────────────
 
     /**
-     * Hands YouTube one of its OWN existing subtitle tracks back to its own
-     * selection method, with hebrewPending armed so the interceptor rewrites
-     * the resulting timedtext URL to tlang=iw.
+     * Produces Hebrew subtitles the NATIVE way:
      *
-     * No object is ever cloned or mutated, so YouTube's internal state stays
-     * consistent and subtitles no longer break after fullscreen / re-open.
+     *   1. Take a real caption track from alxc.t().
+     *   2. Call the track's own translate-builder method, SubtitleTrack.t(lang),
+     *      with "iw" — this is exactly what YouTube's native "Auto-translate →
+     *      <language>" menu does. It returns a proper translated SubtitleTrack
+     *      (a copy of the base with the translation-language field set and the
+     *      "is translated" flag = true).
+     *   3. Hand that track to YouTube's own selection method, alis.a().
+     *
+     * Because the track is built by YouTube's own builder, the whole native
+     * pipeline (timedtext fetch with &tlang=iw, rendering, persistence across
+     * fullscreen/seek) just works — no URL interception, no cloning.
      */
+    private static final String TRANSLATE_LANG = "iw"; // YouTube's legacy code for Hebrew
+
     private static boolean selectHebrew() {
         try {
             Object oju = ojuRef.get();
@@ -274,44 +262,78 @@ public final class HebrewSubtitlesHelper {
                 android.util.Log.w(TAG, "alxc.t() returned empty"); return false;
             }
 
-            // Any real, translatable track works as the translation base.
             Object baseTrack = pickBaseTrack(tracks);
+            if (baseTrack == null) { android.util.Log.w(TAG, "no translatable base track"); return false; }
             android.util.Log.d(TAG, "base track lang=" + getLanguageCode(baseTrack));
 
-            hebrewPending = true;
+            // Build a proper Hebrew-translated track via YouTube's own builder.
+            Object hebrewTrack = buildTranslatedTrack(baseTrack, TRANSLATE_LANG);
+            if (hebrewTrack == null) {
+                android.util.Log.w(TAG, "could not build translated track (t() method not found)");
+                return false;
+            }
+            android.util.Log.d(TAG, "built translated track, lang=" + getLanguageCode(hebrewTrack));
 
-            // Primary path: alis.a(track)
+            // Select it via YouTube's own selection method.
             Method aMethod = findTrackMethod(alis);
-            if (aMethod != null && invokeTrackMethod(alis, aMethod, baseTrack, "alis.a()")) {
+            if (aMethod != null && invokeTrackMethod(alis, aMethod, hebrewTrack, "alis.a()")) {
                 return true;
             }
-
-            // Fallback path: alxc.Q(track)
             Method qMethod = findTrackMethod(alxc);
-            if (qMethod != null && invokeTrackMethod(alxc, qMethod, baseTrack, "alxc.Q()")) {
+            if (qMethod != null && invokeTrackMethod(alxc, qMethod, hebrewTrack, "alxc.Q()")) {
                 return true;
             }
 
-            hebrewPending = false;
             android.util.Log.w(TAG, "no selection method worked");
             return false;
 
         } catch (Exception e) {
-            hebrewPending = false;
             android.util.Log.e(TAG, "selectHebrew failed: " + e);
             return false;
         }
     }
 
-    /** Prefer a non-Hebrew track (so translation has a source); else the first. */
-    private static Object pickBaseTrack(List<Object> tracks) {
-        for (Object t : tracks) {
-            String lang = getLanguageCode(t);
-            if (lang != null && !lang.startsWith("iw") && !lang.startsWith("he")) {
-                return t;
+    /**
+     * Calls SubtitleTrack's translate-builder method on the base track to get a
+     * track translated to {@code lang}. The method is obfuscated (single letter)
+     * but uniquely identifiable: the only NON-static instance method that takes
+     * one String and returns a SubtitleTrack.
+     */
+    private static Object buildTranslatedTrack(Object baseTrack, String lang) {
+        Class<?> trackClass = baseTrack.getClass();
+        // The translate method lives on the abstract SubtitleTrack; walk up.
+        for (Class<?> c = trackClass; c != null && c != Object.class; c = c.getSuperclass()) {
+            for (Method m : c.getDeclaredMethods()) {
+                if (Modifier.isStatic(m.getModifiers())) continue;
+                if (m.getParameterCount() != 1) continue;
+                if (m.getParameterTypes()[0] != String.class) continue;
+                if (!m.getReturnType().getName().contains("SubtitleTrack")) continue;
+                try {
+                    m.setAccessible(true);
+                    Object result = m.invoke(baseTrack, lang);
+                    if (result != null && result != baseTrack) {
+                        android.util.Log.d(TAG, "translate method: " + c.getSimpleName() + "." + m.getName());
+                        return result;
+                    }
+                } catch (Exception ignored) {}
             }
         }
-        return tracks.get(0);
+        return null;
+    }
+
+    /**
+     * Picks a real, translatable base track: a track with a genuine language
+     * code that is not the "disable captions" option and not already Hebrew.
+     */
+    private static Object pickBaseTrack(List<Object> tracks) {
+        Object fallback = null;
+        for (Object t : tracks) {
+            String lang = getLanguageCode(t);
+            if (lang == null || lang.isEmpty()) continue; // skip "disable" option
+            if (fallback == null) fallback = t;
+            if (!lang.startsWith("iw") && !lang.startsWith("he")) return t;
+        }
+        return fallback;
     }
 
     private static boolean invokeTrackMethod(Object target, Method m, Object track, String label) {
