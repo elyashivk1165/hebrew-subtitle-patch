@@ -274,18 +274,34 @@ public final class HebrewSubtitlesHelper {
             }
             android.util.Log.d(TAG, "built translated track, lang=" + getLanguageCode(hebrewTrack));
 
-            // Select it via YouTube's own selection method.
+            // Replicate YouTube's OWN native selection sequence (from
+            // oju.onItemClick), which makes TWO calls on TWO different objects:
+            //
+            //   this.al.a(track);   // selection controller (aliq)  — picks the track
+            //   this.an.L(track);   // renderer (brg)               — actually displays it
+            //
+            // The previous version only did al.a(), so the track was selected but
+            // never rendered ("error retrieving subtitle" / no captions on screen).
+            // an.L() is the missing call that drives the fetch + on-screen display.
+            boolean selected = false;
             Method aMethod = findTrackMethod(alis);
-            if (aMethod != null && invokeTrackMethod(alis, aMethod, hebrewTrack, "alis.a()")) {
-                return true;
-            }
-            Method qMethod = findTrackMethod(alxc);
-            if (qMethod != null && invokeTrackMethod(alxc, qMethod, hebrewTrack, "alxc.Q()")) {
-                return true;
+            if (aMethod != null) {
+                selected = invokeTrackMethod(alis, aMethod, hebrewTrack, "al.a()");
             }
 
-            android.util.Log.w(TAG, "no selection method worked");
-            return false;
+            Object renderer = getDeclaredFieldValue(oju, "an");
+            if (renderer != null) {
+                Method lMethod = findTrackMethod(renderer);
+                if (lMethod != null) {
+                    invokeTrackMethod(renderer, lMethod, hebrewTrack, "an.L()");
+                    selected = true;
+                }
+            } else {
+                android.util.Log.w(TAG, "renderer field 'an' not found");
+            }
+
+            if (!selected) android.util.Log.w(TAG, "no selection method worked");
+            return selected;
 
         } catch (Exception e) {
             android.util.Log.e(TAG, "selectHebrew failed: " + e);
