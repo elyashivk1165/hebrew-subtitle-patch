@@ -372,35 +372,20 @@ public final class HebrewSubtitlesHelper {
      * code that is not the "disable captions" option and not already Hebrew.
      */
     private static Object pickBaseTrack(List<Object> tracks) {
+        // The track list is YouTube's auto-translate options: every entry shares
+        // the SAME source (e.g. English ASR, lang=en) and differs only by its
+        // &tlang= target. Hebrew is usually NOT offered, so we take any entry and
+        // (in injectHebrewIntoTrack) swap its tlang to iw — giving en->Hebrew.
         Object fallback = null;
         for (Object t : tracks) {
             String lang = getLanguageCode(t);
             // Skip the "Off"/"Auto-translate" menu options (non-lang-code values).
             if (lang == null || !isLangCode(lang)) continue;
-            // Skip tracks that are already a translation (their timedtext URL
-            // already carries &tlang=) — translating a translation fails.
-            if (isAlreadyTranslated(t)) continue;
             if (fallback == null) fallback = t;
-            // Prefer a non-Hebrew source.
+            // Prefer a non-Hebrew entry as the template.
             if (!lang.startsWith("iw") && !lang.startsWith("he")) return t;
         }
         return fallback;
-    }
-
-    /** True if the track's timedtext URL already contains a &tlang= param. */
-    private static boolean isAlreadyTranslated(Object track) {
-        for (Field f : track.getClass().getDeclaredFields()) {
-            if (Modifier.isStatic(f.getModifiers())) continue;
-            try {
-                f.setAccessible(true);
-                Object v = f.get(track);
-                if (v instanceof String && ((String) v).contains("timedtext")
-                        && ((String) v).contains("tlang=")) {
-                    return true;
-                }
-            } catch (Throwable ignored) {}
-        }
-        return false;
     }
 
     /**
