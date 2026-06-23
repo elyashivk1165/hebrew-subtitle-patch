@@ -78,7 +78,6 @@ public final class HebrewSubtitlesHelper {
 
     public static String interceptTimedtextUrl(String url) {
         if (url == null || !url.contains("timedtext")) return url;
-        android.util.Log.d(TAG, "TIMEDTEXT_URL " + url);
 
         // STICKY backup: while Hebrew is the active choice, force &tlang=iw on
         // every timedtext fetch (including re-fetches after fullscreen/seek).
@@ -133,16 +132,63 @@ public final class HebrewSubtitlesHelper {
             ojuRef      = new WeakReference<>(ojuInstance);
             listViewRef = new WeakReference<>(listView);
 
-            Context ctx = listView.getContext();
+            final Context ctx = listView.getContext();
             View item = createHebrewListItem(ctx);
             hebrewItemRef = new WeakReference<>(item);
             listView.addFooterView(item, null, false);
             android.util.Log.d(TAG, "Hebrew option injected");
 
-            // Restore our checkmark if Hebrew is the active selection.
-            if (hebrewSelected) showOurCheckmark(item);
+            // After the native rows are laid out, move the checkmark to our item:
+            // copy the real check drawable onto ours and hide the native one. Two
+            // passes (immediate + delayed) because the adapter may bind its rows
+            // slightly after onCreateView.
+            if (hebrewSelected) {
+                final ListView lv = listView;
+                lv.post(() -> syncCheckmark(ctx, lv));
+                lv.postDelayed(() -> syncCheckmark(ctx, lv), 250);
+            }
         } catch (Exception e) {
             android.util.Log.e(TAG, "injectHebrewOption failed: " + e);
+        }
+    }
+
+    /**
+     * Makes the checkmark appear on OUR Hebrew row instead of the native
+     * "Auto-translate · <lang>" row: copies the native check drawable onto our
+     * (otherwise empty) icon and hides the native check. Native rows expose the
+     * check as the resource id "list_item_icon_primary".
+     */
+    private static void syncCheckmark(Context ctx, ListView listView) {
+        try {
+            if (!hebrewSelected) return;
+            View hebrewItem = hebrewItemRef.get();
+            if (hebrewItem == null) return;
+
+            int iconId = ctx.getResources().getIdentifier(
+                    "list_item_icon_primary", "id", ctx.getPackageName());
+            ImageView ourCheck = iconId != 0 ? hebrewItem.findViewById(iconId)
+                                             : findFirstImageView(hebrewItem);
+
+            android.graphics.drawable.Drawable nativeDrawable = null;
+            if (iconId != 0) {
+                for (int i = 0; i < listView.getChildCount(); i++) {
+                    View row = listView.getChildAt(i);
+                    ImageView ic = row.findViewById(iconId);
+                    if (ic == null || ic == ourCheck) continue;
+                    if (ic.getVisibility() == View.VISIBLE && ic.getDrawable() != null) {
+                        nativeDrawable = ic.getDrawable();
+                        ic.setVisibility(View.INVISIBLE); // hide native check
+                    }
+                }
+            }
+            if (ourCheck != null) {
+                if (nativeDrawable != null) ourCheck.setImageDrawable(nativeDrawable);
+                ourCheck.setVisibility(View.VISIBLE);
+                android.util.Log.d(TAG, "checkmark moved to Hebrew (drawable="
+                        + (nativeDrawable != null) + ")");
+            }
+        } catch (Exception e) {
+            android.util.Log.w(TAG, "syncCheckmark failed: " + e);
         }
     }
 
@@ -157,6 +203,9 @@ public final class HebrewSubtitlesHelper {
                 if (tv != null) {
                     tv.setText(LABEL_HEBREW);
                     tv.setTextColor(Color.WHITE);
+                    // Native rows center their text vertically; our inflated copy
+                    // otherwise stretches to fill the row. Match the native look.
+                    tv.setGravity(tv.getGravity() | Gravity.CENTER_VERTICAL);
                 }
                 // Hide the checkmark until Hebrew is actually selected.
                 ImageView check = findFirstImageView(itemView);
@@ -302,10 +351,6 @@ public final class HebrewSubtitlesHelper {
             if (tracks == null || tracks.isEmpty()) {
                 android.util.Log.w(TAG, "alxc.t() returned empty"); return false;
             }
-
-            // DIAGNOSTIC: dump every track so we can identify the real source
-            // track vs. translation options / already-translated tracks.
-            for (int i = 0; i < tracks.size(); i++) dumpTrack(i, tracks.get(i));
 
             Object baseTrack = pickBaseTrack(tracks);
             if (baseTrack == null) { android.util.Log.w(TAG, "no translatable base track"); return false; }
