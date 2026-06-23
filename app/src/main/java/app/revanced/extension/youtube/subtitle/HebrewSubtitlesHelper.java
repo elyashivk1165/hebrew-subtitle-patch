@@ -74,12 +74,23 @@ public final class HebrewSubtitlesHelper {
     }
 
     public static String interceptTimedtextUrl(String url) {
-        // DIAGNOSTIC: log the exact timedtext URL YouTube builds so we can see
-        // whether a translated request is issued and with which tlang value.
-        if (url != null && url.contains("timedtext")) {
-            android.util.Log.d(TAG, "TIMEDTEXT_URL " + url);
+        if (url == null || !url.contains("timedtext")) return url;
+        android.util.Log.d(TAG, "TIMEDTEXT_URL " + url);
+
+        // STICKY backup: while Hebrew is the active choice, force &tlang=iw on
+        // every timedtext fetch (including re-fetches after fullscreen/seek).
+        // The primary mechanism is the track's own URL field (see selectHebrew);
+        // this guarantees the param survives URL rebuilds YouTube does later.
+        if (!hebrewSelected) return url;
+        String out;
+        if (url.contains("&tlang=")) {
+            out = url.replaceFirst("&tlang=[^&]*", "&tlang=" + TRANSLATE_LANG);
+        } else if (url.contains("?tlang=")) {
+            out = url.replaceFirst("\\?tlang=[^&]*", "?tlang=" + TRANSLATE_LANG);
+        } else {
+            out = url + "&tlang=" + TRANSLATE_LANG;
         }
-        return url;
+        return out;
     }
 
     // ── CC Panel injection ────────────────────────────────────────────────────
@@ -270,13 +281,24 @@ public final class HebrewSubtitlesHelper {
             if (baseTrack == null) { android.util.Log.w(TAG, "no translatable base track"); return false; }
             android.util.Log.d(TAG, "base track lang=" + getLanguageCode(baseTrack));
 
-            // Build a proper Hebrew-translated track via YouTube's own builder.
+            // Build a non-destructive copy via YouTube's own builder...
             Object hebrewTrack = buildTranslatedTrack(baseTrack, TRANSLATE_LANG);
             if (hebrewTrack == null) {
                 android.util.Log.w(TAG, "could not build translated track (t() method not found)");
                 return false;
             }
-            android.util.Log.d(TAG, "built translated track, lang=" + getLanguageCode(hebrewTrack));
+            // ...then force &tlang=iw into the copy's timedtext-URL field and set
+            // its language-code fields to "iw". This is the piece that makes the
+            // captions actually render: YouTube fetches the URL stored on the
+            // track, so the URL itself must carry the translation param. Fields
+            // are matched by VALUE (URL contains "timedtext", value is a lang
+            // code), never by obfuscated name. Applied to the COPY only — the
+            // original track is never touched.
+            injectHebrewIntoTrack(hebrewTrack, TRANSLATE_LANG);
+            android.util.Log.d(TAG, "built+injected hebrew track, lang=" + getLanguageCode(hebrewTrack));
+
+            // Arm the sticky URL interceptor before the first fetch fires.
+            hebrewSelected = true;
 
             // Replicate YouTube's OWN native selection sequence (from
             // oju.onItemClick), which makes TWO calls on TWO different objects:
@@ -304,10 +326,14 @@ public final class HebrewSubtitlesHelper {
                 android.util.Log.w(TAG, "renderer field 'an' not found");
             }
 
-            if (!selected) android.util.Log.w(TAG, "no selection method worked");
+            if (!selected) {
+                hebrewSelected = false; // disarm interceptor on failure
+                android.util.Log.w(TAG, "no selection method worked");
+            }
             return selected;
 
         } catch (Exception e) {
+            hebrewSelected = false;
             android.util.Log.e(TAG, "selectHebrew failed: " + e);
             return false;
         }
@@ -349,11 +375,64 @@ public final class HebrewSubtitlesHelper {
         Object fallback = null;
         for (Object t : tracks) {
             String lang = getLanguageCode(t);
-            if (lang == null || lang.isEmpty()) continue; // skip "disable" option
+            // Skip the "Off"/"Auto-translate" menu options (non-lang-code values).
+            if (lang == null || !isLangCode(lang)) continue;
+            // Skip tracks that are already a translation (their timedtext URL
+            // already carries &tlang=) — translating a translation fails.
+            if (isAlreadyTranslated(t)) continue;
             if (fallback == null) fallback = t;
+            // Prefer a non-Hebrew source.
             if (!lang.startsWith("iw") && !lang.startsWith("he")) return t;
         }
         return fallback;
+    }
+
+    /** True if the track's timedtext URL already contains a &tlang= param. */
+    private static boolean isAlreadyTranslated(Object track) {
+        for (Field f : track.getClass().getDeclaredFields()) {
+            if (Modifier.isStatic(f.getModifiers())) continue;
+            try {
+                f.setAccessible(true);
+                Object v = f.get(track);
+                if (v instanceof String && ((String) v).contains("timedtext")
+                        && ((String) v).contains("tlang=")) {
+                    return true;
+                }
+            } catch (Throwable ignored) {}
+        }
+        return false;
+    }
+
+    /**
+     * Forces Hebrew onto a track copy by value-pattern field rewriting:
+     *   - the field holding the timedtext URL gets &tlang=iw (appended if absent),
+     *   - any field holding a bare language code is set to iw.
+     * Name-agnostic, so it survives R8 renaming. Mutates the COPY only.
+     */
+    private static void injectHebrewIntoTrack(Object track, String lang) {
+        for (Field f : track.getClass().getDeclaredFields()) {
+            if (Modifier.isStatic(f.getModifiers())) continue;
+            try {
+                f.setAccessible(true);
+                Object v = f.get(track);
+                if (!(v instanceof String)) continue;
+                String s = (String) v;
+                if (s.contains("timedtext")) {
+                    String nu;
+                    if (s.contains("&tlang=")) {
+                        nu = s.replaceFirst("&tlang=[^&]*", "&tlang=" + lang);
+                    } else if (s.contains("?tlang=")) {
+                        nu = s.replaceFirst("\\?tlang=[^&]*", "?tlang=" + lang);
+                    } else {
+                        nu = s + "&tlang=" + lang;
+                    }
+                    f.set(track, nu);
+                    android.util.Log.d(TAG, "URL field set with tlang=" + lang);
+                } else if (isLangCode(s) && !s.equals(lang)) {
+                    f.set(track, lang);
+                }
+            } catch (Throwable ignored) {}
+        }
     }
 
     /** DIAGNOSTIC: logs every no-arg getter (String/boolean/int/Optional) of a track. */
