@@ -74,11 +74,11 @@ public final class HebrewSubtitlesHelper {
     }
 
     public static String interceptTimedtextUrl(String url) {
-        // No-op pass-through. We no longer rewrite URLs: Hebrew is now produced
-        // the NATIVE way — by building a real translated SubtitleTrack via
-        // SubtitleTrack.t(lang) (see selectHebrew). YouTube then builds the
-        // correct &tlang=iw timedtext URL itself and renders it natively, so
-        // URL interception is unnecessary. Kept only for hook compatibility.
+        // DIAGNOSTIC: log the exact timedtext URL YouTube builds so we can see
+        // whether a translated request is issued and with which tlang value.
+        if (url != null && url.contains("timedtext")) {
+            android.util.Log.d(TAG, "TIMEDTEXT_URL " + url);
+        }
         return url;
     }
 
@@ -262,6 +262,10 @@ public final class HebrewSubtitlesHelper {
                 android.util.Log.w(TAG, "alxc.t() returned empty"); return false;
             }
 
+            // DIAGNOSTIC: dump every track so we can identify the real source
+            // track vs. translation options / already-translated tracks.
+            for (int i = 0; i < tracks.size(); i++) dumpTrack(i, tracks.get(i));
+
             Object baseTrack = pickBaseTrack(tracks);
             if (baseTrack == null) { android.util.Log.w(TAG, "no translatable base track"); return false; }
             android.util.Log.d(TAG, "base track lang=" + getLanguageCode(baseTrack));
@@ -350,6 +354,30 @@ public final class HebrewSubtitlesHelper {
             if (!lang.startsWith("iw") && !lang.startsWith("he")) return t;
         }
         return fallback;
+    }
+
+    /** DIAGNOSTIC: logs every no-arg getter (String/boolean/int/Optional) of a track. */
+    private static void dumpTrack(int idx, Object track) {
+        if (track == null) { android.util.Log.d(TAG, "track[" + idx + "]=null"); return; }
+        StringBuilder sb = new StringBuilder("track[" + idx + "] ");
+        for (Method m : track.getClass().getMethods()) {
+            if (m.getParameterCount() != 0) continue;
+            String name = m.getName();
+            if (name.equals("hashCode") || name.equals("toString")
+                    || name.equals("describeContents") || name.equals("getClass")) continue;
+            Class<?> rt = m.getReturnType();
+            boolean wanted = rt == String.class || rt == boolean.class
+                    || rt == int.class || rt.getName().contains("Optional")
+                    || rt.getName().contains("CharSequence");
+            if (!wanted) continue;
+            try {
+                m.setAccessible(true);
+                Object v = m.invoke(track);
+                if (rt == boolean.class && Boolean.FALSE.equals(v)) continue; // skip false noise
+                sb.append(name).append('=').append(v).append(' ');
+            } catch (Throwable ignored) {}
+        }
+        android.util.Log.d(TAG, sb.toString());
     }
 
     private static boolean invokeTrackMethod(Object target, Method m, Object track, String label) {
