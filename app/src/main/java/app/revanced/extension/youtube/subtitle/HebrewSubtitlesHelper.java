@@ -65,6 +65,9 @@ public final class HebrewSubtitlesHelper {
 
     /** True once the user has activated Hebrew, so we can restore the checkmark. */
     private static volatile boolean hebrewSelected = false;
+    /** Video id Hebrew was activated for; the interceptor only translates this
+     *  video, so other videos keep their normal captions. */
+    private static volatile String hebrewVideoId = null;
 
     // ── URL interceptor ───────────────────────────────────────────────────────
 
@@ -82,6 +85,12 @@ public final class HebrewSubtitlesHelper {
         // The primary mechanism is the track's own URL field (see selectHebrew);
         // this guarantees the param survives URL rebuilds YouTube does later.
         if (!hebrewSelected) return url;
+        // Only translate the video Hebrew was activated for — leave other videos
+        // (and new navigations) with their normal captions.
+        if (hebrewVideoId != null && !hebrewVideoId.isEmpty()
+                && !url.contains("v=" + hebrewVideoId)) {
+            return url;
+        }
         String out;
         if (url.contains("&tlang=")) {
             out = url.replaceFirst("&tlang=[^&]*", "&tlang=" + TRANSLATE_LANG);
@@ -90,7 +99,28 @@ public final class HebrewSubtitlesHelper {
         } else {
             out = url + "&tlang=" + TRANSLATE_LANG;
         }
+        android.util.Log.d(TAG, "interceptor → forced tlang=" + TRANSLATE_LANG);
         return out;
+    }
+
+    /** Extracts the v= video id from any String field of the track that holds a URL. */
+    private static String extractVideoId(Object track) {
+        for (Field f : track.getClass().getDeclaredFields()) {
+            if (Modifier.isStatic(f.getModifiers())) continue;
+            try {
+                f.setAccessible(true);
+                Object v = f.get(track);
+                if (v instanceof String && ((String) v).contains("timedtext")) {
+                    String s = (String) v;
+                    int i = s.indexOf("v=");
+                    if (i >= 0) {
+                        int j = s.indexOf('&', i + 2);
+                        return j < 0 ? s.substring(i + 2) : s.substring(i + 2, j);
+                    }
+                }
+            } catch (Throwable ignored) {}
+        }
+        return null;
     }
 
     // ── CC Panel injection ────────────────────────────────────────────────────
@@ -281,23 +311,18 @@ public final class HebrewSubtitlesHelper {
             if (baseTrack == null) { android.util.Log.w(TAG, "no translatable base track"); return false; }
             android.util.Log.d(TAG, "base track lang=" + getLanguageCode(baseTrack));
 
-            // Build a non-destructive copy via YouTube's own builder...
-            Object hebrewTrack = buildTranslatedTrack(baseTrack, TRANSLATE_LANG);
-            if (hebrewTrack == null) {
-                android.util.Log.w(TAG, "could not build translated track (t() method not found)");
-                return false;
-            }
-            // ...then force &tlang=iw into the copy's timedtext-URL field and set
-            // its language-code fields to "iw". This is the piece that makes the
-            // captions actually render: YouTube fetches the URL stored on the
-            // track, so the URL itself must carry the translation param. Fields
-            // are matched by VALUE (URL contains "timedtext", value is a lang
-            // code), never by obfuscated name. Applied to the COPY only — the
-            // original track is never touched.
-            injectHebrewIntoTrack(hebrewTrack, TRANSLATE_LANG);
-            android.util.Log.d(TAG, "built+injected hebrew track, lang=" + getLanguageCode(hebrewTrack));
+            // Select the CLEAN existing track, UNMODIFIED. YouTube fetches its
+            // real (English-source) timedtext URL and renders it; the sticky URL
+            // interceptor then swaps &tlang to iw, turning the fetched content
+            // into Hebrew. Verified on-device: a real track + the armed
+            // interceptor renders Hebrew, whereas a hand-built custom track had a
+            // broken identity YouTube refused to fetch ("error retrieving
+            // subtitle"). So we do NOT build/inject a custom track anymore.
+            Object hebrewTrack = baseTrack;
 
-            // Arm the sticky URL interceptor before the first fetch fires.
+            // Scope the interceptor to THIS video, then arm it (before the fetch).
+            hebrewVideoId = extractVideoId(baseTrack);
+            android.util.Log.d(TAG, "hebrew video id=" + hebrewVideoId);
             hebrewSelected = true;
 
             // Replicate YouTube's OWN native selection sequence (from
