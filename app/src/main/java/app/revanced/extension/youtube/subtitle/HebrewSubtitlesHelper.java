@@ -35,8 +35,8 @@ import java.util.List;
  *
  *   3. A Cronet URL interceptor (injected at EVERY newUrlRequestBuilder call site)
  *      forces &tlang=iw on the timedtext fetch, turning the English source into
- *      Hebrew. It is scoped to the activated video's v= id, so other videos keep
- *      their normal captions, and sticky so Hebrew survives fullscreen/seek.
+ *      Hebrew. It is GLOBAL while active \u2014 every video is translated until the
+ *      user disarms \u2014 and sticky so Hebrew survives fullscreen/seek/navigation.
  *
  *   4. Tapping any native caption row disarms Hebrew (the footer is non-selectable
  *      so only native rows fire onItemClick). We move the checkmark onto our row
@@ -79,17 +79,12 @@ public final class HebrewSubtitlesHelper {
     public static String interceptTimedtextUrl(String url) {
         if (url == null || !url.contains("timedtext")) return url;
 
-        // STICKY backup: while Hebrew is the active choice, force &tlang=iw on
-        // every timedtext fetch (including re-fetches after fullscreen/seek).
-        // The primary mechanism is the track's own URL field (see selectHebrew);
-        // this guarantees the param survives URL rebuilds YouTube does later.
+        // GLOBAL "set and forget": while Hebrew is active, force &tlang=iw on
+        // EVERY timedtext fetch \u2014 so the current video and every following video
+        // are translated, surviving fullscreen/seek and navigation. Tapping any
+        // native caption option (Off / a language) disarms it (see the
+        // onItemClick wrapper in injectHebrewOption).
         if (!hebrewSelected) return url;
-        // Only translate the video Hebrew was activated for \u2014 leave other videos
-        // (and new navigations) with their normal captions.
-        if (hebrewVideoId != null && !hebrewVideoId.isEmpty()
-                && !url.contains("v=" + hebrewVideoId)) {
-            return url;
-        }
         String out;
         if (url.contains("&tlang=")) {
             out = url.replaceFirst("&tlang=[^&]*", "&tlang=" + TRANSLATE_LANG);
