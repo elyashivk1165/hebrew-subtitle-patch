@@ -35,13 +35,6 @@ private fun Method.indexOfNewUrlRequestBuilderInstruction() =
             ")Lorg/chromium/net/UrlRequest\$Builder;"
     }
 
-private fun Method.indexOfBuildInstruction() =
-    findInstructionIndex { instr ->
-        instr.opcode == Opcode.INVOKE_VIRTUAL &&
-        (instr as? ReferenceInstruction)?.reference?.toString() ==
-            "Lorg/chromium/net/UrlRequest\$Builder;->build()Lorg/chromium/net/UrlRequest;"
-    }
-
 private fun Method.indexOfAddFooterViewInstruction() =
     findInstructionIndex { instr ->
         instr.opcode == Opcode.INVOKE_VIRTUAL &&
@@ -50,16 +43,6 @@ private fun Method.indexOfAddFooterViewInstruction() =
     }
 
 // ── Fingerprints ──────────────────────────────────────────────────────────────
-
-@Suppress("DEPRECATION")
-private val transcriptUrlFingerprint = fingerprint {
-    accessFlags(AccessFlags.PUBLIC, AccessFlags.FINAL)
-    returns("L")
-    custom { method, _ ->
-        method.indexOfNewUrlRequestBuilderInstruction() >= 0 &&
-        method.indexOfBuildInstruction() >= 0
-    }
-}
 
 @Suppress("DEPRECATION")
 private val subtitleMenuSheetFingerprint = fingerprint {

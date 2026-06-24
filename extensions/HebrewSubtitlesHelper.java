@@ -20,32 +20,31 @@ import java.lang.reflect.Modifier;
 import java.util.List;
 
 /**
- * Adds a "Hebrew (auto-translate)" option to YouTube's CC bottom sheet that
- * drives YouTube's OWN native auto-translation, so Hebrew subtitles render and
- * persist exactly like the built-in "Auto-translate \u2192 <language>" menu.
+ * Adds a "Hebrew (auto-translate)" option to YouTube's CC bottom sheet. Hebrew
+ * is NOT in YouTube's native auto-translate list, so we synthesise it.
  *
  * How it works:
  *
- *   1. We take a real caption track from the subtitle controller (alxc.t()).
+ *   1. alxc.t() returns YouTube's auto-translate options \u2014 they all share one
+ *      English-ASR source (lang=en) and differ only by &tlang=XX. We pick any
+ *      entry as a template (pickBaseTrack).
  *
- *   2. We call that track's own translate-builder method \u2014 SubtitleTrack.t(lang)
- *      \u2014 with "iw". This is the exact method YouTube itself uses for native
- *      auto-translation: it returns a proper translated SubtitleTrack (a copy of
- *      the base track with the translation-language field set and the
- *      "is translated" flag = true). We never clone or mutate anything by hand.
+ *   2. We select that REAL track unmodified via YouTube's own two-call sequence
+ *      (copied from oju.onItemClick): oju.al.a(track) selects it and oju.an.L(track)
+ *      renders it \u2014 both are required, a() alone selects but never displays.
  *
- *   3. We hand that translated track to YouTube's own selection method,
- *      alis.a(). Because the object was built by YouTube's own builder, the
- *      whole native pipeline works: the timedtext request is built with
- *      &tlang=iw, the captions render, and they persist across fullscreen, seek
- *      and quality changes \u2014 with NO URL interception.
+ *   3. A Cronet URL interceptor (injected at EVERY newUrlRequestBuilder call site)
+ *      forces &tlang=iw on the timedtext fetch, turning the English source into
+ *      Hebrew. It is scoped to the activated video's v= id, so other videos keep
+ *      their normal captions, and sticky so Hebrew survives fullscreen/seek.
  *
- *   4. We mark our own footer item and dismiss the sheet; we do not fight
- *      YouTube's native checkmark rendering.
+ *   4. Tapping any native caption row disarms Hebrew (the footer is non-selectable
+ *      so only native rows fire onItemClick). We move the checkmark onto our row
+ *      and relabel the borrowed language's row to "Hebrew".
  *
- * The single-letter method names (t, a, g) are obfuscated and change between
- * versions, so every lookup is by SIGNATURE/shape, not by name \u2014 which survives
- * R8 renaming. The class name SubtitleTrack itself is not obfuscated.
+ * Single-letter names (t, a, g, L) are obfuscated and change between versions, so
+ * every lookup is by SIGNATURE/shape, not by name. The class name SubtitleTrack
+ * and the resource ids list_item_text / list_item_icon_primary are not obfuscated.
  */
 public final class HebrewSubtitlesHelper {
 
@@ -77,11 +76,6 @@ public final class HebrewSubtitlesHelper {
 
     // \u2500\u2500 URL interceptor \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
-    public static void saveTimedtextRequest(Object engine, String url,
-                                             Object callback, Object executor) {
-        // kept for hook compatibility
-    }
-
     public static String interceptTimedtextUrl(String url) {
         if (url == null || !url.contains("timedtext")) return url;
 
@@ -104,7 +98,6 @@ public final class HebrewSubtitlesHelper {
         } else {
             out = url + "&tlang=" + TRANSLATE_LANG;
         }
-        android.util.Log.d(TAG, "interceptor \u2192 forced tlang=" + TRANSLATE_LANG);
         return out;
     }
 
@@ -274,7 +267,7 @@ public final class HebrewSubtitlesHelper {
             if (layoutId != 0) {
                 android.view.LayoutInflater inflater = android.view.LayoutInflater.from(ctx);
                 // Inflate WITH the ListView as parent (attachToRoot=false) so the
-                // row gets the same LayoutParams as native rows — otherwise a
+                // row gets the same LayoutParams as native rows \u2014 otherwise a
                 // null parent drops them and the row sits/aligns differently.
                 View itemView = inflater.inflate(layoutId, parent, false);
                 TextView tv = findFirstTextView(itemView);
@@ -486,42 +479,12 @@ public final class HebrewSubtitlesHelper {
     }
 
     /**
-     * Calls SubtitleTrack's translate-builder method on the base track to get a
-     * track translated to {@code lang}. The method is obfuscated (single letter)
-     * but uniquely identifiable: the only NON-static instance method that takes
-     * one String and returns a SubtitleTrack.
-     */
-    private static Object buildTranslatedTrack(Object baseTrack, String lang) {
-        Class<?> trackClass = baseTrack.getClass();
-        // The translate method lives on the abstract SubtitleTrack; walk up.
-        for (Class<?> c = trackClass; c != null && c != Object.class; c = c.getSuperclass()) {
-            for (Method m : c.getDeclaredMethods()) {
-                if (Modifier.isStatic(m.getModifiers())) continue;
-                if (m.getParameterCount() != 1) continue;
-                if (m.getParameterTypes()[0] != String.class) continue;
-                if (!m.getReturnType().getName().contains("SubtitleTrack")) continue;
-                try {
-                    m.setAccessible(true);
-                    Object result = m.invoke(baseTrack, lang);
-                    if (result != null && result != baseTrack) {
-                        android.util.Log.d(TAG, "translate method: " + c.getSimpleName() + "." + m.getName());
-                        return result;
-                    }
-                } catch (Exception ignored) {}
-            }
-        }
-        return null;
-    }
-
-    /**
-     * Picks a real, translatable base track: a track with a genuine language
-     * code that is not the "disable captions" option and not already Hebrew.
+     * Picks a real base track: every entry in YouTube's auto-translate list shares
+     * the SAME source (e.g. English ASR, lang=en) and differs only by its &tlang=
+     * target. Hebrew is usually NOT offered, so we take any entry as the template
+     * and let the interceptor swap its tlang to iw \u2014 giving en\u2192Hebrew.
      */
     private static Object pickBaseTrack(List<Object> tracks) {
-        // The track list is YouTube's auto-translate options: every entry shares
-        // the SAME source (e.g. English ASR, lang=en) and differs only by its
-        // &tlang= target. Hebrew is usually NOT offered, so we take any entry and
-        // (in injectHebrewIntoTrack) swap its tlang to iw \u2014 giving en->Hebrew.
         Object fallback = null;
         for (Object t : tracks) {
             String lang = getLanguageCode(t);
@@ -532,62 +495,6 @@ public final class HebrewSubtitlesHelper {
             if (!lang.startsWith("iw") && !lang.startsWith("he")) return t;
         }
         return fallback;
-    }
-
-    /**
-     * Forces Hebrew onto a track copy by value-pattern field rewriting:
-     *   - the field holding the timedtext URL gets &tlang=iw (appended if absent),
-     *   - any field holding a bare language code is set to iw.
-     * Name-agnostic, so it survives R8 renaming. Mutates the COPY only.
-     */
-    private static void injectHebrewIntoTrack(Object track, String lang) {
-        for (Field f : track.getClass().getDeclaredFields()) {
-            if (Modifier.isStatic(f.getModifiers())) continue;
-            try {
-                f.setAccessible(true);
-                Object v = f.get(track);
-                if (!(v instanceof String)) continue;
-                String s = (String) v;
-                if (s.contains("timedtext")) {
-                    String nu;
-                    if (s.contains("&tlang=")) {
-                        nu = s.replaceFirst("&tlang=[^&]*", "&tlang=" + lang);
-                    } else if (s.contains("?tlang=")) {
-                        nu = s.replaceFirst("\\?tlang=[^&]*", "?tlang=" + lang);
-                    } else {
-                        nu = s + "&tlang=" + lang;
-                    }
-                    f.set(track, nu);
-                    android.util.Log.d(TAG, "URL field set with tlang=" + lang);
-                } else if (isLangCode(s) && !s.equals(lang)) {
-                    f.set(track, lang);
-                }
-            } catch (Throwable ignored) {}
-        }
-    }
-
-    /** DIAGNOSTIC: logs every no-arg getter (String/boolean/int/Optional) of a track. */
-    private static void dumpTrack(int idx, Object track) {
-        if (track == null) { android.util.Log.d(TAG, "track[" + idx + "]=null"); return; }
-        StringBuilder sb = new StringBuilder("track[" + idx + "] ");
-        for (Method m : track.getClass().getMethods()) {
-            if (m.getParameterCount() != 0) continue;
-            String name = m.getName();
-            if (name.equals("hashCode") || name.equals("toString")
-                    || name.equals("describeContents") || name.equals("getClass")) continue;
-            Class<?> rt = m.getReturnType();
-            boolean wanted = rt == String.class || rt == boolean.class
-                    || rt == int.class || rt.getName().contains("Optional")
-                    || rt.getName().contains("CharSequence");
-            if (!wanted) continue;
-            try {
-                m.setAccessible(true);
-                Object v = m.invoke(track);
-                if (rt == boolean.class && Boolean.FALSE.equals(v)) continue; // skip false noise
-                sb.append(name).append('=').append(v).append(' ');
-            } catch (Throwable ignored) {}
-        }
-        android.util.Log.d(TAG, sb.toString());
     }
 
     private static boolean invokeTrackMethod(Object target, Method m, Object track, String label) {
