@@ -170,7 +170,7 @@ public final class HebrewSubtitlesHelper {
             listViewRef = new WeakReference<>(listView);
 
             final Context ctx = listView.getContext();
-            View item = createHebrewListItem(ctx);
+            View item = createHebrewListItem(ctx, listView);
             hebrewItemRef = new WeakReference<>(item);
             listView.addFooterView(item, null, false);
             android.util.Log.d(TAG, "Hebrew option injected");
@@ -267,20 +267,20 @@ public final class HebrewSubtitlesHelper {
         }
     }
 
-    private static View createHebrewListItem(Context ctx) {
+    private static View createHebrewListItem(Context ctx, ViewGroup parent) {
         try {
             int layoutId = ctx.getResources().getIdentifier(
                     "bottom_sheet_list_checkmark_item", "layout", ctx.getPackageName());
             if (layoutId != 0) {
                 android.view.LayoutInflater inflater = android.view.LayoutInflater.from(ctx);
-                View itemView = inflater.inflate(layoutId, null, false);
+                // Inflate WITH the ListView as parent (attachToRoot=false) so the
+                // row gets the same LayoutParams as native rows — otherwise a
+                // null parent drops them and the row sits/aligns differently.
+                View itemView = inflater.inflate(layoutId, parent, false);
                 TextView tv = findFirstTextView(itemView);
                 if (tv != null) {
                     tv.setText(LABEL_HEBREW);
                     tv.setTextColor(Color.WHITE);
-                    // Native rows center their text vertically; our inflated copy
-                    // otherwise stretches to fill the row. Match the native look.
-                    tv.setGravity(tv.getGravity() | Gravity.CENTER_VERTICAL);
                 }
                 // Hide the checkmark until Hebrew is actually selected.
                 ImageView check = findFirstImageView(itemView);
