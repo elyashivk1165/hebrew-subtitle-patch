@@ -7,6 +7,7 @@ import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.AdapterView;
 import android.widget.ImageView;
 import android.widget.ListView;
 import android.widget.TextView;
@@ -138,12 +139,34 @@ public final class HebrewSubtitlesHelper {
             listView.addFooterView(item, null, false);
             android.util.Log.d(TAG, "Hebrew option injected");
 
+            final ListView lv = listView;
+
+            // Disarm Hebrew when the user taps any NATIVE caption option (English,
+            // Off, another language). Our footer is non-selectable so it never
+            // triggers onItemClick — only native rows do — so any onItemClick means
+            // "the user chose something other than Hebrew". Without this the sticky
+            // flag stayed on forever: the checkmark got stuck on Hebrew and the
+            // interceptor kept turning English into Hebrew. Wrapped in post() so
+            // YouTube's own listener is already set by the time we wrap it.
+            lv.post(() -> {
+                try {
+                    final AdapterView.OnItemClickListener orig = lv.getOnItemClickListener();
+                    lv.setOnItemClickListener((parent, view, pos, id) -> {
+                        hebrewSelected = false;
+                        hebrewVideoId = null;
+                        android.util.Log.d(TAG, "native option tapped → Hebrew disarmed");
+                        if (orig != null) orig.onItemClick(parent, view, pos, id);
+                    });
+                } catch (Exception e) {
+                    android.util.Log.w(TAG, "wrap onItemClick failed: " + e);
+                }
+            });
+
             // After the native rows are laid out, move the checkmark to our item:
             // copy the real check drawable onto ours and hide the native one. Two
             // passes (immediate + delayed) because the adapter may bind its rows
             // slightly after onCreateView.
             if (hebrewSelected) {
-                final ListView lv = listView;
                 lv.post(() -> syncCheckmark(ctx, lv));
                 lv.postDelayed(() -> syncCheckmark(ctx, lv), 250);
             }
