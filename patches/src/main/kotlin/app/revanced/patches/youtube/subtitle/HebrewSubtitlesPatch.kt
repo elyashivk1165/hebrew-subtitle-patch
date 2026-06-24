@@ -96,31 +96,40 @@ val hebrewSubtitlesPatch: Patch = bytecodePatch(
 
     execute {
 
-        // ── Injection 0: URL interceptor (flag-based) ─────────────────────────
+        // ── Injection 0: URL interceptor at EVERY Cronet call site ────────────
         //
-        // Saves request params AND conditionally appends &tlang=iw.
-        // interceptTimedtextUrl() only modifies the URL when the Hebrew flag is
-        // set — so English/other tracks are never affected.
-        val urlClassDef = transcriptUrlFingerprint.classDefOrNull
-            ?: throw PatchException("Could not find CronetEngine.newUrlRequestBuilder call site")
-
-        transcriptUrlFingerprint.match(urlClassDef).method.apply {
-            val urlIndex = indexOfNewUrlRequestBuilderInstruction()
-            val invoke   = getInstruction<FiveRegisterInstruction>(urlIndex)
-            val cronetReg   = invoke.registerC
-            val urlReg      = invoke.registerD
-            val callbackReg = invoke.registerE
-            val executorReg = invoke.registerF
-
-            addInstructionsWithLabels(
-                urlIndex,
-                """
-                invoke-static { v$cronetReg, v$urlReg, v$callbackReg, v$executorReg }, $HELPER->saveTimedtextRequest(Ljava/lang/Object;Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Object;)V
-                invoke-static { v$urlReg }, $HELPER->interceptTimedtextUrl(Ljava/lang/String;)Ljava/lang/String;
-                move-result-object v$urlReg
-                """,
-            )
+        // Verified in the bytecode that YouTube builds requests through SEVERAL
+        // HTTP clients — there are multiple CronetEngine.newUrlRequestBuilder
+        // call sites. Hooking only one made Hebrew work only intermittently and
+        // come back slowly after the app was backgrounded, because some subtitle
+        // (timedtext) fetches went through the other clients and bypassed us.
+        //
+        // We now hook them ALL. interceptTimedtextUrl() ignores any URL that does
+        // not contain "timedtext", so every other request passes through
+        // untouched and only Hebrew subtitle fetches are affected.
+        var urlHooks = 0
+        classes.toList().forEach { classDef ->
+            if (classDef.methods.none { it.indexOfNewUrlRequestBuilderInstruction() >= 0 }) return@forEach
+            proxy(classDef).mutableClass.methods.forEach { method ->
+                val urlIndex = method.indexOfNewUrlRequestBuilderInstruction()
+                if (urlIndex < 0) return@forEach
+                try {
+                    val urlReg = method.getInstruction<FiveRegisterInstruction>(urlIndex).registerD
+                    method.addInstructionsWithLabels(
+                        urlIndex,
+                        """
+                        invoke-static { v$urlReg }, $HELPER->interceptTimedtextUrl(Ljava/lang/String;)Ljava/lang/String;
+                        move-result-object v$urlReg
+                        """,
+                    )
+                    urlHooks++
+                } catch (_: Exception) {
+                    // call site is not a simple 4-register invoke; skip it
+                }
+            }
         }
+        if (urlHooks == 0)
+            throw PatchException("Could not find any CronetEngine.newUrlRequestBuilder call site")
 
         // ── Injections inside the CC panel class ──────────────────────────────
         val subtitleSheetClassDef = subtitleMenuSheetFingerprint.classDefOrNull

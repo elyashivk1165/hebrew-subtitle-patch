@@ -22,14 +22,14 @@ import java.util.List;
 /**
  * Adds a "Hebrew (auto-translate)" option to YouTube's CC bottom sheet that
  * drives YouTube's OWN native auto-translation, so Hebrew subtitles render and
- * persist exactly like the built-in "Auto-translate → <language>" menu.
+ * persist exactly like the built-in "Auto-translate \u2192 <language>" menu.
  *
  * How it works:
  *
  *   1. We take a real caption track from the subtitle controller (alxc.t()).
  *
- *   2. We call that track's own translate-builder method — SubtitleTrack.t(lang)
- *      — with "iw". This is the exact method YouTube itself uses for native
+ *   2. We call that track's own translate-builder method \u2014 SubtitleTrack.t(lang)
+ *      \u2014 with "iw". This is the exact method YouTube itself uses for native
  *      auto-translation: it returns a proper translated SubtitleTrack (a copy of
  *      the base track with the translation-language field set and the
  *      "is translated" flag = true). We never clone or mutate anything by hand.
@@ -38,13 +38,13 @@ import java.util.List;
  *      alis.a(). Because the object was built by YouTube's own builder, the
  *      whole native pipeline works: the timedtext request is built with
  *      &tlang=iw, the captions render, and they persist across fullscreen, seek
- *      and quality changes — with NO URL interception.
+ *      and quality changes \u2014 with NO URL interception.
  *
  *   4. We mark our own footer item and dismiss the sheet; we do not fight
  *      YouTube's native checkmark rendering.
  *
  * The single-letter method names (t, a, g) are obfuscated and change between
- * versions, so every lookup is by SIGNATURE/shape, not by name — which survives
+ * versions, so every lookup is by SIGNATURE/shape, not by name \u2014 which survives
  * R8 renaming. The class name SubtitleTrack itself is not obfuscated.
  */
 public final class HebrewSubtitlesHelper {
@@ -59,6 +59,8 @@ public final class HebrewSubtitlesHelper {
             "\u05DB\u05EA\u05D5\u05D1\u05D9\u05D5\u05EA \u05E2\u05D1\u05E8\u05D9\u05EA: \u05E4\u05E2\u05D9\u05DC";
     private static final String TOAST_FAIL =
             "\u05E9\u05D2\u05D9\u05D0\u05D4: \u05E2\u05D1\u05E8\u05D9\u05EA \u05DC\u05D0 \u05E0\u05DE\u05E6\u05D0\u05D4";
+    /** Just "Hebrew" \u2014 used to relabel the borrowed track's row in the menu. */
+    private static final String HEBREW_SHORT = "\u05E2\u05D1\u05E8\u05D9\u05EA";
 
     private static WeakReference<Object>   ojuRef        = new WeakReference<>(null);
     private static WeakReference<View>     hebrewItemRef = new WeakReference<>(null);
@@ -69,8 +71,11 @@ public final class HebrewSubtitlesHelper {
     /** Video id Hebrew was activated for; the interceptor only translates this
      *  video, so other videos keep their normal captions. */
     private static volatile String hebrewVideoId = null;
+    /** Display name of the borrowed track (e.g. "Ukrainian") so we can relabel
+     *  its menu row to "Hebrew". */
+    private static volatile String borrowedName = null;
 
-    // ── URL interceptor ───────────────────────────────────────────────────────
+    // \u2500\u2500 URL interceptor \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
     public static void saveTimedtextRequest(Object engine, String url,
                                              Object callback, Object executor) {
@@ -85,7 +90,7 @@ public final class HebrewSubtitlesHelper {
         // The primary mechanism is the track's own URL field (see selectHebrew);
         // this guarantees the param survives URL rebuilds YouTube does later.
         if (!hebrewSelected) return url;
-        // Only translate the video Hebrew was activated for — leave other videos
+        // Only translate the video Hebrew was activated for \u2014 leave other videos
         // (and new navigations) with their normal captions.
         if (hebrewVideoId != null && !hebrewVideoId.isEmpty()
                 && !url.contains("v=" + hebrewVideoId)) {
@@ -99,7 +104,7 @@ public final class HebrewSubtitlesHelper {
         } else {
             out = url + "&tlang=" + TRANSLATE_LANG;
         }
-        android.util.Log.d(TAG, "interceptor → forced tlang=" + TRANSLATE_LANG);
+        android.util.Log.d(TAG, "interceptor \u2192 forced tlang=" + TRANSLATE_LANG);
         return out;
     }
 
@@ -123,7 +128,38 @@ public final class HebrewSubtitlesHelper {
         return null;
     }
 
-    // ── CC Panel injection ────────────────────────────────────────────────────
+    /** The track's display name via its only no-arg CharSequence getter (f()). */
+    private static String getTrackName(Object track) {
+        try {
+            for (Method m : track.getClass().getMethods()) {
+                if (m.getParameterCount() != 0) continue;
+                if (m.getReturnType() != CharSequence.class) continue;
+                m.setAccessible(true);
+                Object v = m.invoke(track);
+                if (v != null) return v.toString();
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    /** True if the menu currently shown belongs to the video Hebrew was activated for. */
+    private static boolean matchesHebrewVideo(Object oju) {
+        if (hebrewVideoId == null || hebrewVideoId.isEmpty()) return hebrewSelected;
+        try {
+            Object alis = getDeclaredFieldValue(oju, "al");
+            Object alxc = alis != null ? findAlxc(alis) : null;
+            if (alxc != null) {
+                @SuppressWarnings("unchecked")
+                List<Object> tracks = (List<Object>) alxc.getClass().getMethod("t").invoke(alxc);
+                if (tracks != null && !tracks.isEmpty()) {
+                    return hebrewVideoId.equals(extractVideoId(tracks.get(0)));
+                }
+            }
+        } catch (Exception ignored) {}
+        return false;
+    }
+
+    // \u2500\u2500 CC Panel injection \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
     public static void injectHebrewOption(Object ojuInstance, ListView listView) {
         try {
@@ -143,7 +179,7 @@ public final class HebrewSubtitlesHelper {
 
             // Disarm Hebrew when the user taps any NATIVE caption option (English,
             // Off, another language). Our footer is non-selectable so it never
-            // triggers onItemClick — only native rows do — so any onItemClick means
+            // triggers onItemClick \u2014 only native rows do \u2014 so any onItemClick means
             // "the user chose something other than Hebrew". Without this the sticky
             // flag stayed on forever: the checkmark got stuck on Hebrew and the
             // interceptor kept turning English into Hebrew. Wrapped in post() so
@@ -154,7 +190,7 @@ public final class HebrewSubtitlesHelper {
                     lv.setOnItemClickListener((parent, view, pos, id) -> {
                         hebrewSelected = false;
                         hebrewVideoId = null;
-                        android.util.Log.d(TAG, "native option tapped → Hebrew disarmed");
+                        android.util.Log.d(TAG, "native option tapped \u2192 Hebrew disarmed");
                         if (orig != null) orig.onItemClick(parent, view, pos, id);
                     });
                 } catch (Exception e) {
@@ -165,8 +201,10 @@ public final class HebrewSubtitlesHelper {
             // After the native rows are laid out, move the checkmark to our item:
             // copy the real check drawable onto ours and hide the native one. Two
             // passes (immediate + delayed) because the adapter may bind its rows
-            // slightly after onCreateView.
-            if (hebrewSelected) {
+            // slightly after onCreateView. Only when THIS video is the one Hebrew
+            // was activated for \u2014 otherwise the checkmark would wrongly persist on
+            // other videos.
+            if (hebrewSelected && matchesHebrewVideo(ojuInstance)) {
                 lv.post(() -> syncCheckmark(ctx, lv));
                 lv.postDelayed(() -> syncCheckmark(ctx, lv), 250);
             }
@@ -177,7 +215,7 @@ public final class HebrewSubtitlesHelper {
 
     /**
      * Makes the checkmark appear on OUR Hebrew row instead of the native
-     * "Auto-translate · <lang>" row: copies the native check drawable onto our
+     * "Auto-translate \u00B7 <lang>" row: copies the native check drawable onto our
      * (otherwise empty) icon and hides the native check. Native rows expose the
      * check as the resource id "list_item_icon_primary".
      */
@@ -193,15 +231,18 @@ public final class HebrewSubtitlesHelper {
                                              : findFirstImageView(hebrewItem);
 
             android.graphics.drawable.Drawable nativeDrawable = null;
-            if (iconId != 0) {
-                for (int i = 0; i < listView.getChildCount(); i++) {
-                    View row = listView.getChildAt(i);
-                    ImageView ic = row.findViewById(iconId);
-                    if (ic == null || ic == ourCheck) continue;
-                    if (ic.getVisibility() == View.VISIBLE && ic.getDrawable() != null) {
-                        nativeDrawable = ic.getDrawable();
-                        ic.setVisibility(View.INVISIBLE); // hide native check
-                    }
+            for (int i = 0; i < listView.getChildCount(); i++) {
+                View row = listView.getChildAt(i);
+                ImageView ic = iconId != 0 ? row.findViewById(iconId) : null;
+                if (ic != null && ic != ourCheck
+                        && ic.getVisibility() == View.VISIBLE && ic.getDrawable() != null) {
+                    nativeDrawable = ic.getDrawable();
+                    ic.setVisibility(View.INVISIBLE); // hide native check
+                }
+                // Relabel the borrowed track's name (e.g. "Ukrainian") to "Hebrew"
+                // so the menu reads "Auto-translate \u00B7 Hebrew" instead.
+                if (borrowedName != null && row != hebrewItem) {
+                    relabelText(row, borrowedName, HEBREW_SHORT);
                 }
             }
             if (ourCheck != null) {
@@ -212,6 +253,17 @@ public final class HebrewSubtitlesHelper {
             }
         } catch (Exception e) {
             android.util.Log.w(TAG, "syncCheckmark failed: " + e);
+        }
+    }
+
+    /** Recursively replaces any TextView whose text equals {@code from} with {@code to}. */
+    private static void relabelText(View v, String from, String to) {
+        if (v instanceof TextView) {
+            CharSequence t = ((TextView) v).getText();
+            if (t != null && from.contentEquals(t)) ((TextView) v).setText(to);
+        } else if (v instanceof ViewGroup) {
+            ViewGroup vg = (ViewGroup) v;
+            for (int i = 0; i < vg.getChildCount(); i++) relabelText(vg.getChildAt(i), from, to);
         }
     }
 
@@ -266,7 +318,7 @@ public final class HebrewSubtitlesHelper {
         return tv;
     }
 
-    // ── Click handler ─────────────────────────────────────────────────────────
+    // \u2500\u2500 Click handler \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
     private static void onHebrewItemClicked(Context ctx) {
         android.util.Log.d(TAG, "onHebrewItemClicked");
@@ -339,14 +391,14 @@ public final class HebrewSubtitlesHelper {
         return null;
     }
 
-    // ── Core selection logic ──────────────────────────────────────────────────
+    // \u2500\u2500 Core selection logic \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
     /**
      * Produces Hebrew subtitles the NATIVE way:
      *
      *   1. Take a real caption track from alxc.t().
      *   2. Call the track's own translate-builder method, SubtitleTrack.t(lang),
-     *      with "iw" — this is exactly what YouTube's native "Auto-translate →
+     *      with "iw" \u2014 this is exactly what YouTube's native "Auto-translate \u2192
      *      <language>" menu does. It returns a proper translated SubtitleTrack
      *      (a copy of the base with the translation-language field set and the
      *      "is translated" flag = true).
@@ -354,7 +406,7 @@ public final class HebrewSubtitlesHelper {
      *
      * Because the track is built by YouTube's own builder, the whole native
      * pipeline (timedtext fetch with &tlang=iw, rendering, persistence across
-     * fullscreen/seek) just works — no URL interception, no cloning.
+     * fullscreen/seek) just works \u2014 no URL interception, no cloning.
      */
     private static final String TRANSLATE_LANG = "iw"; // YouTube's legacy code for Hebrew
 
@@ -390,14 +442,15 @@ public final class HebrewSubtitlesHelper {
 
             // Scope the interceptor to THIS video, then arm it (before the fetch).
             hebrewVideoId = extractVideoId(baseTrack);
-            android.util.Log.d(TAG, "hebrew video id=" + hebrewVideoId);
+            borrowedName  = getTrackName(baseTrack); // e.g. "Ukrainian" \u2192 relabel to Hebrew
+            android.util.Log.d(TAG, "hebrew video id=" + hebrewVideoId + " borrowed=" + borrowedName);
             hebrewSelected = true;
 
             // Replicate YouTube's OWN native selection sequence (from
             // oju.onItemClick), which makes TWO calls on TWO different objects:
             //
-            //   this.al.a(track);   // selection controller (aliq)  — picks the track
-            //   this.an.L(track);   // renderer (brg)               — actually displays it
+            //   this.al.a(track);   // selection controller (aliq)  \u2014 picks the track
+            //   this.an.L(track);   // renderer (brg)               \u2014 actually displays it
             //
             // The previous version only did al.a(), so the track was selected but
             // never rendered ("error retrieving subtitle" / no captions on screen).
@@ -468,7 +521,7 @@ public final class HebrewSubtitlesHelper {
         // The track list is YouTube's auto-translate options: every entry shares
         // the SAME source (e.g. English ASR, lang=en) and differs only by its
         // &tlang= target. Hebrew is usually NOT offered, so we take any entry and
-        // (in injectHebrewIntoTrack) swap its tlang to iw — giving en->Hebrew.
+        // (in injectHebrewIntoTrack) swap its tlang to iw \u2014 giving en->Hebrew.
         Object fallback = null;
         for (Object t : tracks) {
             String lang = getLanguageCode(t);
@@ -550,7 +603,7 @@ public final class HebrewSubtitlesHelper {
         return false;
     }
 
-    // ── Reflection helpers ────────────────────────────────────────────────────
+    // \u2500\u2500 Reflection helpers \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
     /**
      * Returns the BCP-47-ish language code of a SubtitleTrack. Tries the
@@ -594,7 +647,7 @@ public final class HebrewSubtitlesHelper {
         return null;
     }
 
-    /** Finds alxc in alis: the field whose class has a public t()→List method. */
+    /** Finds alxc in alis: the field whose class has a public t()\u2192List method. */
     private static Object findAlxc(Object alis) {
         for (Field f : alis.getClass().getDeclaredFields()) {
             f.setAccessible(true);
