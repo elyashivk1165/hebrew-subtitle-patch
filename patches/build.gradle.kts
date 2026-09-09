@@ -40,3 +40,7 @@ tasks.register<Sync>("exportVerificationTools") {
     from(sourceSets["test"].output) { into("classes") }
     into(layout.buildDirectory.dir("verification-tools"))
 }
+
+dependencies {
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+}
