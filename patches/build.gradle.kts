@@ -17,3 +17,14 @@ kotlin {
         freeCompilerArgs = listOf("-Xcontext-parameters", "-Xskip-prerelease-check")
     }
 }
+
+// Exercise Morphe's real bundle loader to catch binary/API linkage problems.
+tasks.register<JavaExec>("verifyPatchBundle") {
+    dependsOn("buildAndroid", "testClasses")
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("PatchBundleSmokeTest")
+    doFirst {
+        args(layout.buildDirectory.dir("libs").get().asFile
+            .listFiles()!!.single { it.extension == "mpp" }.absolutePath)
+    }
+}
