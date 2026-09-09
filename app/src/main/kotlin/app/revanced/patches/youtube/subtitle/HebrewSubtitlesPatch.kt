@@ -1,13 +1,12 @@
 package app.revanced.patches.youtube.subtitle
 
-import app.revanced.patcher.extensions.InstructionExtensions.addInstruction
-import app.revanced.patcher.extensions.InstructionExtensions.addInstructionsWithLabels
-import app.revanced.patcher.extensions.InstructionExtensions.getInstruction
-import app.revanced.patcher.fingerprint
-import app.revanced.patcher.patch.Patch
-import app.revanced.patcher.patch.PatchException
-import app.revanced.patcher.patch.bytecodePatch
-import app.revanced.patcher.util.smali.ExternalLabel
+import app.morphe.patcher.extensions.InstructionExtensions.addInstruction
+import app.morphe.patcher.extensions.InstructionExtensions.addInstructionsWithLabels
+import app.morphe.patcher.extensions.InstructionExtensions.getInstruction
+import app.morphe.patcher.fingerprint
+import app.morphe.patcher.patch.PatchException
+import app.morphe.patcher.patch.bytecodePatch
+import app.morphe.patcher.util.smali.ExternalLabel
 import com.android.tools.smali.dexlib2.AccessFlags
 import com.android.tools.smali.dexlib2.Opcode
 import com.android.tools.smali.dexlib2.iface.Method
@@ -105,11 +104,11 @@ private val subtitleMenuSheetFingerprint = fingerprint {
 // ── Patch ─────────────────────────────────────────────────────────────────────
 
 @Suppress("unused", "DEPRECATION")
-val hebrewSubtitlesPatch: Patch = bytecodePatch(
+val hebrewSubtitlesPatch = bytecodePatch(
     "Hebrew auto-translated subtitles",
     "Injects &tlang=iw into YouTube's timedtext URLs and adds a CC-panel option to switch to Hebrew.",
 ) {
-    compatibleWith("com.google.android.youtube" to (null as Set<String>?))
+    compatibleWith("com.google.android.youtube")
 
     extendWith("hebrew-helper.dex")
 

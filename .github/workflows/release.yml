@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - codex/morphe-mpp
 
 jobs:
   release:
@@ -73,11 +74,19 @@ jobs:
           chmod +x gradlew
           ./gradlew :patches:buildAndroid
 
+      - name: Upload MPP
+        uses: actions/upload-artifact@v4
+        with:
+          name: hebrew-subtitles-morphe
+          path: patches/build/libs/*.mpp
+          if-no-files-found: error
+
       - name: Create Release
+        if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.0.${{ github.run_number }}
-          name: Hebrew Subtitle Patch v1.0.${{ github.run_number }}
-          files: "patches/build/libs/*.rvp"
+          name: Hebrew Subtitle Patch for Morphe v1.0.${{ github.run_number }}
+          files: "patches/build/libs/*.mpp"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

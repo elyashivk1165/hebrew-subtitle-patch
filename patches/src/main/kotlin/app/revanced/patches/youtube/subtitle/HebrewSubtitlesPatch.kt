@@ -1,12 +1,11 @@
 package app.revanced.patches.youtube.subtitle
 
-import app.revanced.patcher.extensions.InstructionExtensions.addInstruction
-import app.revanced.patcher.extensions.InstructionExtensions.addInstructionsWithLabels
-import app.revanced.patcher.extensions.InstructionExtensions.getInstruction
-import app.revanced.patcher.fingerprint
-import app.revanced.patcher.patch.Patch
-import app.revanced.patcher.patch.PatchException
-import app.revanced.patcher.patch.bytecodePatch
+import app.morphe.patcher.extensions.InstructionExtensions.addInstruction
+import app.morphe.patcher.extensions.InstructionExtensions.addInstructionsWithLabels
+import app.morphe.patcher.extensions.InstructionExtensions.getInstruction
+import app.morphe.patcher.fingerprint
+import app.morphe.patcher.patch.PatchException
+import app.morphe.patcher.patch.bytecodePatch
 import com.android.tools.smali.dexlib2.AccessFlags
 import com.android.tools.smali.dexlib2.Opcode
 import com.android.tools.smali.dexlib2.iface.Method
@@ -69,11 +68,11 @@ private val subtitleMenuSheetFingerprint = fingerprint {
 // ── Patch ─────────────────────────────────────────────────────────────────────
 
 @Suppress("unused", "DEPRECATION")
-val hebrewSubtitlesPatch: Patch = bytecodePatch(
+val hebrewSubtitlesPatch = bytecodePatch(
     "Hebrew auto-translated subtitles",
     "Adds a Hebrew option to the CC panel using direct track selection with URL interception fallback.",
 ) {
-    compatibleWith("com.google.android.youtube" to (null as Set<String>?))
+    compatibleWith("com.google.android.youtube")
 
     extendWith("hebrew-helper.dex")
 
@@ -91,9 +90,9 @@ val hebrewSubtitlesPatch: Patch = bytecodePatch(
         // not contain "timedtext", so every other request passes through
         // untouched and only Hebrew subtitle fetches are affected.
         var urlHooks = 0
-        classes.toList().forEach { classDef ->
-            if (classDef.methods.none { it.indexOfNewUrlRequestBuilderInstruction() >= 0 }) return@forEach
-            proxy(classDef).mutableClass.methods.forEach { method ->
+        classDefForEach { classDef ->
+            if (classDef.methods.none { it.indexOfNewUrlRequestBuilderInstruction() >= 0 }) return@classDefForEach
+            mutableClassDefBy(classDef).methods.forEach { method ->
                 val urlIndex = method.indexOfNewUrlRequestBuilderInstruction()
                 if (urlIndex < 0) return@forEach
                 try {

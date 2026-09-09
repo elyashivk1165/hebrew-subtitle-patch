@@ -2,7 +2,7 @@ group = "app.revanced"
 
 patches {
     about {
-        name = "Hebrew Subtitle Patch"
+        name = "Hebrew Subtitle Patch for Morphe"
         description = "Adds Hebrew auto-translation to YouTube subtitles"
         source = "https://github.com/elyashivk1165/hebrew-subtitle-patch"
         author = "elyashivk1165"
