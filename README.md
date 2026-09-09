@@ -33,3 +33,13 @@ The build uses Morphe's Gradle plugin and patcher API. The runtime Java helper a
 its `app.revanced.extension` namespace are retained so injected method references
 continue to match. The `app/` directory is a legacy mirror; Gradle builds `patches/`.
 See `docs/HOW-IT-WORKS.md` for the original runtime design and known limitations.
+
+## YouTube 21.07.247 correction
+
+The older helper expected the obsolete SubtitleTrack model and fixed controller
+fields. This version uses the real caption row and YouTube's native click handler,
+which performs both selection and rendering. The runtime row mapping is scoped
+to 21.07.247; patch-time checks reject other models. Both caption sheets are hooked.
+
+`exportVerificationTools` exports the patcher and a local APK verification runner.
+The user APK remains local; it is not uploaded to this repository or CI.

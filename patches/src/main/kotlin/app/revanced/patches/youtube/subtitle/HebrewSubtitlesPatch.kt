@@ -3,10 +3,8 @@ package app.revanced.patches.youtube.subtitle
 import app.morphe.patcher.extensions.InstructionExtensions.addInstruction
 import app.morphe.patcher.extensions.InstructionExtensions.addInstructionsWithLabels
 import app.morphe.patcher.extensions.InstructionExtensions.getInstruction
-import app.morphe.patcher.fingerprint
 import app.morphe.patcher.patch.PatchException
 import app.morphe.patcher.patch.bytecodePatch
-import com.android.tools.smali.dexlib2.AccessFlags
 import com.android.tools.smali.dexlib2.Opcode
 import com.android.tools.smali.dexlib2.iface.Method
 import com.android.tools.smali.dexlib2.iface.instruction.FiveRegisterInstruction
@@ -41,30 +39,6 @@ private fun Method.indexOfAddFooterViewInstruction() =
             ?.contains("Landroid/widget/ListView;->addFooterView") == true
     }
 
-// ── Fingerprints ──────────────────────────────────────────────────────────────
-
-@Suppress("DEPRECATION")
-private val subtitleMenuSheetFingerprint = fingerprint {
-    accessFlags(AccessFlags.PUBLIC, AccessFlags.FINAL)
-    returns("Landroid/view/View;")
-    parameters(
-        "Landroid/view/LayoutInflater;",
-        "Landroid/view/ViewGroup;",
-        "Landroid/os/Bundle;",
-    )
-    custom { method, classDef ->
-        classDef.methods.any { m ->
-            m.implementation?.instructions?.any { instr ->
-                (instr.opcode == Opcode.CONST_STRING ||
-                 instr.opcode == Opcode.CONST_STRING_JUMBO) &&
-                (instr as? ReferenceInstruction)?.reference?.toString() ==
-                    "SUBTITLE_MENU_BOTTOM_SHEET_FRAGMENT"
-            } == true
-        } &&
-        method.indexOfAddFooterViewInstruction() >= 0
-    }
-}
-
 // ── Patch ─────────────────────────────────────────────────────────────────────
 
 @Suppress("unused", "DEPRECATION")
@@ -72,11 +46,20 @@ val hebrewSubtitlesPatch = bytecodePatch(
     "Hebrew auto-translated subtitles",
     "Adds a Hebrew option to the CC panel using direct track selection with URL interception fallback.",
 ) {
-    compatibleWith("com.google.android.youtube")
+    compatibleWith("com.google.android.youtube" to setOf("21.07.247"))
 
     extendWith("hebrew-helper.dex")
 
     execute {
+        // The runtime native-row adapter is deliberately scoped to this model.
+        val row = classDefBy("Losm;")
+        val track = classDefBy("Lanyg;")
+        if (row.fields.none { it.name == "a" && it.type == "Lanyg;" } ||
+            track.fields.none { it.name == "a" && it.type == "Ljava/lang/String;" } ||
+            track.fields.none { it.name == "o" && it.type == "Ljava/lang/CharSequence;" }) {
+            throw PatchException("Unsupported subtitle model; expected YouTube 21.07.247")
+        }
+
 
         // ── Injection 0: URL interceptor at EVERY Cronet call site ────────────
         //
@@ -113,27 +96,29 @@ val hebrewSubtitlesPatch = bytecodePatch(
         if (urlHooks == 0)
             throw PatchException("Could not find any CronetEngine.newUrlRequestBuilder call site")
 
-        // ── Injections inside the CC panel class ──────────────────────────────
-        val subtitleSheetClassDef = subtitleMenuSheetFingerprint.classDefOrNull
-        if (subtitleSheetClassDef != null) {
-
-            // ── Injection 1: inject Hebrew footer item ────────────────────────
-            //
-            // Hooked in oju.N() (onCreateView), BEFORE YouTube's addFooterView.
-            // isSelectable=false means our footer never gets a position in onItemClick,
-            // so track item positions are not affected.
-            // p0 = oju instance, v$listViewReg = ListView.
-            try {
-                subtitleMenuSheetFingerprint.match(subtitleSheetClassDef).method.apply {
-                    val footerIdx   = indexOfAddFooterViewInstruction()
-                    val listViewReg = getInstruction<FiveRegisterInstruction>(footerIdx).registerC
-                    addInstruction(
-                        footerIdx,
-                        "invoke-static { p0, v$listViewReg }, $HELPER->injectHebrewOption(Ljava/lang/Object;Landroid/widget/ListView;)V",
-                    )
-                }
-            } catch (_: Exception) {}
-
+        // Both caption bottom sheets exist in this APK. Patch each matching
+        // implementation instead of using the first fingerprint match only.
+        var menuHooks = 0
+        classDefForEach { classDef ->
+            val isCaptionMenu = classDef.methods.any { method ->
+                method.implementation?.instructions?.any { instruction ->
+                    (instruction.opcode == Opcode.CONST_STRING ||
+                     instruction.opcode == Opcode.CONST_STRING_JUMBO) &&
+                    (instruction as? ReferenceInstruction)?.reference?.toString() ==
+                        "SUBTITLE_MENU_BOTTOM_SHEET_FRAGMENT"
+                } == true
+            }
+            if (!isCaptionMenu) return@classDefForEach
+            mutableClassDefBy(classDef).methods.forEach { method ->
+                val footerIdx = method.indexOfAddFooterViewInstruction()
+                if (footerIdx < 0) return@forEach
+                val listViewReg = method.getInstruction<FiveRegisterInstruction>(footerIdx).registerC
+                method.addInstruction(footerIdx,
+                    "invoke-static { p0, v$listViewReg }, $HELPER->injectHebrewOption(Ljava/lang/Object;Landroid/widget/ListView;)V")
+                menuHooks++
+            }
         }
+        if (menuHooks != 2) throw PatchException("Expected 2 caption menus, found $menuHooks")
+        println("Hebrew subtitles: installed $urlHooks URL hooks and $menuHooks menu hooks")
     }
 }

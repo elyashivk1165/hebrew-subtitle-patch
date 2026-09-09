@@ -32,3 +32,11 @@ tasks.register<JavaExec>("verifyPatchBundle") {
 tasks.withType<JavaCompile>().configureEach {
     options.release.set(11)
 }
+
+// Export tools for testing a user-provided APK locally without uploading it.
+tasks.register<Sync>("exportVerificationTools") {
+    dependsOn("testClasses")
+    from(configurations["testRuntimeClasspath"]) { into("lib") }
+    from(sourceSets["test"].output) { into("classes") }
+    into(layout.buildDirectory.dir("verification-tools"))
+}
