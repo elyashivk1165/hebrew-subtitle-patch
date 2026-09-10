@@ -1,4 +1,5 @@
 group = "app.revanced"
+version = "1.2.0"
 
 patches {
     about {

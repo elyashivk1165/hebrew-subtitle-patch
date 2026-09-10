@@ -46,18 +46,23 @@ val hebrewSubtitlesPatch = bytecodePatch(
     "Hebrew auto-translated subtitles",
     "Adds a Hebrew option to the CC panel using direct track selection with URL interception fallback.",
 ) {
-    compatibleWith("com.google.android.youtube" to setOf("21.07.247"))
+    compatibleWith("com.google.android.youtube" to setOf("21.07.247", "21.13.164"))
 
     extendWith("hebrew-helper.dex")
 
     execute {
         // The runtime native-row adapter is deliberately scoped to this model.
-        val row = classDefBy("Losm;")
-        val track = classDefBy("Lanyg;")
-        if (row.fields.none { it.name == "a" && it.type == "Lanyg;" } ||
+        val model = when (packageMetadata.versionName) {
+            "21.07.247" -> Triple("Losm;", "Lanyg;", "o")
+            "21.13.164" -> Triple("Loxg;", "Laolf;", "p")
+            else -> throw PatchException("Unsupported YouTube version: ${packageMetadata.versionName}")
+        }
+        val row = classDefBy(model.first)
+        val track = classDefBy(model.second)
+        if (row.fields.none { it.name == "a" && it.type == model.second } ||
             track.fields.none { it.name == "a" && it.type == "Ljava/lang/String;" } ||
-            track.fields.none { it.name == "o" && it.type == "Ljava/lang/CharSequence;" }) {
-            throw PatchException("Unsupported subtitle model; expected YouTube 21.07.247")
+            track.fields.none { it.name == model.third && it.type == "Ljava/lang/CharSequence;" }) {
+            throw PatchException("Unexpected subtitle model for YouTube ${packageMetadata.versionName}")
         }
 
 
