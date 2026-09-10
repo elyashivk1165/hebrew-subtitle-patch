@@ -43,3 +43,14 @@ to 21.07.247; patch-time checks reject other models. Both caption sheets are hoo
 
 `exportVerificationTools` exports the patcher and a local APK verification runner.
 The user APK remains local; it is not uploaded to this repository or CI.
+
+## YouTube 21.13.164 support (bundle 1.2.0)
+
+The supported versions are 21.07.247 and 21.13.164. Inspection of the new APK
+confirmed that native caption selection still performs both selection and
+rendering, but the row/track classes and label field changed. The patch selects
+and validates the model by the APK version.
+
+The remote source stays at `morphe-source/patches-bundle.json`. Its version and
+binary are updated together after APK patch execution and DEX serialization
+pass locally. Playback still requires an on-device check.

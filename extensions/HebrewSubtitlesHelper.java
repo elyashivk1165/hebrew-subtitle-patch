@@ -17,7 +17,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 
 /**
- * Hebrew captions for YouTube 21.07.247. Select an existing caption through
+ * Hebrew captions for YouTube 21.07.247 and 21.13.164. Select an existing caption through
  * the native ListView callback, which performs both selection and rendering.
  * Keep timedtext rewriting armed until the user selects another native row.
  */
@@ -317,19 +317,21 @@ public final class HebrewSubtitlesHelper {
             android.widget.ListAdapter adapter = list.getAdapter();
             for (int position = 0; position < adapter.getCount(); position++) {
                 Object row = adapter.getItem(position);
-                // These fields were verified against 21.07.247. Patch metadata
-                // limits this implementation to that version, and the patcher
-                // validates their types before installing the extension.
-                if (row == null || !row.getClass().getName().equals("osm")) continue;
+                // These mappings are verified from the supported APKs and
+                // checked by the patcher before installing the extension.
+                if (row == null) continue;
+                String rowClass = row.getClass().getName();
+                boolean newerModel = rowClass.equals("oxg");
+                if (!newerModel && !rowClass.equals("osm")) continue;
                 Field trackField = row.getClass().getDeclaredField("a");
                 trackField.setAccessible(true);
                 Object track = trackField.get(row);
-                if (track == null || !track.getClass().getName().equals("anyg")) continue;
+                if (track == null || !track.getClass().getName().equals(newerModel ? "aolf" : "anyg")) continue;
                 Field languageField = track.getClass().getDeclaredField("a");
                 languageField.setAccessible(true);
                 String language = (String) languageField.get(track);
                 if (language == null || !language.matches("[a-z]{2,3}([_-][A-Za-z0-9]{2,8})*")) continue;
-                Field nameField = track.getClass().getDeclaredField("o");
+                Field nameField = track.getClass().getDeclaredField(newerModel ? "p" : "o");
                 nameField.setAccessible(true);
                 Object name = nameField.get(track);
                 borrowedName = name == null ? null : name.toString();
