@@ -8,6 +8,7 @@ import app.morphe.patcher.patch.bytecodePatch
 import com.android.tools.smali.dexlib2.Opcode
 import com.android.tools.smali.dexlib2.iface.Method
 import com.android.tools.smali.dexlib2.iface.instruction.FiveRegisterInstruction
+import com.android.tools.smali.dexlib2.iface.reference.StringReference
 import com.android.tools.smali.dexlib2.iface.instruction.ReferenceInstruction
 
 private const val HELPER = "Lapp/revanced/extension/youtube/subtitle/HebrewSubtitlesHelper;"
@@ -32,11 +33,19 @@ private fun Method.indexOfNewUrlRequestBuilderInstruction() =
             ")Lorg/chromium/net/UrlRequest\$Builder;"
     }
 
-private fun Method.indexOfAddFooterViewInstruction() =
-    findInstructionIndex { instr ->
-        instr.opcode == Opcode.INVOKE_VIRTUAL &&
-        (instr as? ReferenceInstruction)?.reference?.toString()
-            ?.contains("Landroid/widget/ListView;->addFooterView") == true
+private const val NATIVE_CAPTION_FOOTER =
+    "Landroid/widget/ListView;->addFooterView(Landroid/view/View;Ljava/lang/Object;Z)V"
+private const val MORPHE_CAPTION_FOOTER =
+    "Lapp/morphe/extension/youtube/patches/HidePlayerFlyoutMenuPatch;->" +
+        "hideCaptionsOldBottomSheetFooter(Landroid/widget/ListView;Landroid/view/View;Ljava/lang/Object;Z)V"
+
+private fun Method.indexOfCaptionFooterInstruction() =
+    findInstructionIndex { instruction ->
+        val target = (instruction as? ReferenceInstruction)?.reference?.toString()
+        // Both calls pass the ListView as their first register. The official
+        // flyout patch replaces the virtual call with this static wrapper.
+        (instruction.opcode == Opcode.INVOKE_VIRTUAL && target == NATIVE_CAPTION_FOOTER) ||
+            (instruction.opcode == Opcode.INVOKE_STATIC && target == MORPHE_CAPTION_FOOTER)
     }
 
 // ── Patch ─────────────────────────────────────────────────────────────────────
@@ -109,13 +118,13 @@ val hebrewSubtitlesPatch = bytecodePatch(
                 method.implementation?.instructions?.any { instruction ->
                     (instruction.opcode == Opcode.CONST_STRING ||
                      instruction.opcode == Opcode.CONST_STRING_JUMBO) &&
-                    (instruction as? ReferenceInstruction)?.reference?.toString() ==
+                    ((instruction as? ReferenceInstruction)?.reference as? StringReference)?.string ==
                         "SUBTITLE_MENU_BOTTOM_SHEET_FRAGMENT"
                 } == true
             }
             if (!isCaptionMenu) return@classDefForEach
             mutableClassDefBy(classDef).methods.forEach { method ->
-                val footerIdx = method.indexOfAddFooterViewInstruction()
+                val footerIdx = method.indexOfCaptionFooterInstruction()
                 if (footerIdx < 0) return@forEach
                 val listViewReg = method.getInstruction<FiveRegisterInstruction>(footerIdx).registerC
                 method.addInstruction(footerIdx,
@@ -123,7 +132,9 @@ val hebrewSubtitlesPatch = bytecodePatch(
                 menuHooks++
             }
         }
-        if (menuHooks != 2) throw PatchException("Expected 2 caption menus, found $menuHooks")
+        if (menuHooks != 2) throw PatchException(
+            "Expected 2 caption menus, found $menuHooks (checked native and Morphe flyout footer calls)"
+        )
         println("Hebrew subtitles: installed $urlHooks URL hooks and $menuHooks menu hooks")
     }
 }
