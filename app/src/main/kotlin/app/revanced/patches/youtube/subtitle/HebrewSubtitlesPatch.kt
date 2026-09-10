@@ -1,17 +1,14 @@
 package app.revanced.patches.youtube.subtitle
 
-import app.revanced.patcher.extensions.InstructionExtensions.addInstruction
-import app.revanced.patcher.extensions.InstructionExtensions.addInstructionsWithLabels
-import app.revanced.patcher.extensions.InstructionExtensions.getInstruction
-import app.revanced.patcher.fingerprint
-import app.revanced.patcher.patch.Patch
-import app.revanced.patcher.patch.PatchException
-import app.revanced.patcher.patch.bytecodePatch
-import app.revanced.patcher.util.smali.ExternalLabel
-import com.android.tools.smali.dexlib2.AccessFlags
+import app.morphe.patcher.extensions.InstructionExtensions.addInstruction
+import app.morphe.patcher.extensions.InstructionExtensions.addInstructionsWithLabels
+import app.morphe.patcher.extensions.InstructionExtensions.getInstruction
+import app.morphe.patcher.patch.PatchException
+import app.morphe.patcher.patch.bytecodePatch
 import com.android.tools.smali.dexlib2.Opcode
 import com.android.tools.smali.dexlib2.iface.Method
 import com.android.tools.smali.dexlib2.iface.instruction.FiveRegisterInstruction
+import com.android.tools.smali.dexlib2.iface.reference.StringReference
 import com.android.tools.smali.dexlib2.iface.instruction.ReferenceInstruction
 
 private const val HELPER = "Lapp/revanced/extension/youtube/subtitle/HebrewSubtitlesHelper;"
@@ -36,148 +33,108 @@ private fun Method.indexOfNewUrlRequestBuilderInstruction() =
             ")Lorg/chromium/net/UrlRequest\$Builder;"
     }
 
-private fun Method.indexOfBuildInstruction() =
-    findInstructionIndex { instr ->
-        instr.opcode == Opcode.INVOKE_VIRTUAL &&
-        (instr as? ReferenceInstruction)?.reference?.toString() ==
-            "Lorg/chromium/net/UrlRequest\$Builder;->build()Lorg/chromium/net/UrlRequest;"
-    }
+private const val NATIVE_CAPTION_FOOTER =
+    "Landroid/widget/ListView;->addFooterView(Landroid/view/View;Ljava/lang/Object;Z)V"
+private const val MORPHE_CAPTION_FOOTER =
+    "Lapp/morphe/extension/youtube/patches/HidePlayerFlyoutMenuPatch;->" +
+        "hideCaptionsOldBottomSheetFooter(Landroid/widget/ListView;Landroid/view/View;Ljava/lang/Object;Z)V"
 
-private fun Method.indexOfAddFooterViewInstruction() =
-    findInstructionIndex { instr ->
-        instr.opcode == Opcode.INVOKE_VIRTUAL &&
-        (instr as? ReferenceInstruction)?.reference?.toString()
-            ?.contains("Landroid/widget/ListView;->addFooterView") == true
+private fun Method.indexOfCaptionFooterInstruction() =
+    findInstructionIndex { instruction ->
+        val target = (instruction as? ReferenceInstruction)?.reference?.toString()
+        // Both calls pass the ListView as their first register. The official
+        // flyout patch replaces the virtual call with this static wrapper.
+        (instruction.opcode == Opcode.INVOKE_VIRTUAL && target == NATIVE_CAPTION_FOOTER) ||
+            (instruction.opcode == Opcode.INVOKE_STATIC && target == MORPHE_CAPTION_FOOTER)
     }
-
-// ── Fingerprints ──────────────────────────────────────────────────────────────
-
-/**
- * Fingerprint for the CronetEngine.newUrlRequestBuilder call site.
- */
-@Suppress("DEPRECATION")
-private val transcriptUrlFingerprint = fingerprint {
-    accessFlags(AccessFlags.PUBLIC, AccessFlags.FINAL)
-    returns("L")
-    custom { method, _ ->
-        method.indexOfNewUrlRequestBuilderInstruction() >= 0 &&
-        method.indexOfBuildInstruction() >= 0
-    }
-}
-
-/**
- * Fingerprint for SubtitleMenuBottomSheetFragment.onCreateView (oju.N).
- *
- * Identification: the class contains the string constant
- * "SUBTITLE_MENU_BOTTOM_SHEET_FRAGMENT" (used in a conditional inside the
- * class), and this specific method calls ListView.addFooterView — both
- * characteristics are unique to the CC track-selection panel.
- *
- * Injection: right before addFooterView, pass p0 (oju instance) and the
- * ListView register to `injectHebrewOption(Object, ListView)`.
- * The helper stores a WeakRef to oju and uses it for reflection-based
- * track selection when the user taps "עברית".
- */
-@Suppress("DEPRECATION")
-private val subtitleMenuSheetFingerprint = fingerprint {
-    accessFlags(AccessFlags.PUBLIC, AccessFlags.FINAL)
-    returns("Landroid/view/View;")
-    parameters(
-        "Landroid/view/LayoutInflater;",
-        "Landroid/view/ViewGroup;",
-        "Landroid/os/Bundle;",
-    )
-    custom { method, classDef ->
-        // Class must contain the "SUBTITLE_MENU_BOTTOM_SHEET_FRAGMENT" string constant
-        classDef.methods.any { m ->
-            m.implementation?.instructions?.any { instr ->
-                (instr.opcode == Opcode.CONST_STRING ||
-                 instr.opcode == Opcode.CONST_STRING_JUMBO) &&
-                (instr as? ReferenceInstruction)?.reference?.toString() ==
-                    "SUBTITLE_MENU_BOTTOM_SHEET_FRAGMENT"
-            } == true
-        } &&
-        // This exact method calls addFooterView (oju.N)
-        method.indexOfAddFooterViewInstruction() >= 0
-    }
-}
 
 // ── Patch ─────────────────────────────────────────────────────────────────────
 
 @Suppress("unused", "DEPRECATION")
-val hebrewSubtitlesPatch: Patch = bytecodePatch(
+val hebrewSubtitlesPatch = bytecodePatch(
     "Hebrew auto-translated subtitles",
-    "Injects &tlang=iw into YouTube's timedtext URLs and adds a CC-panel option to switch to Hebrew.",
+    "Adds a Hebrew option to the CC panel using direct track selection with URL interception fallback.",
 ) {
-    compatibleWith("com.google.android.youtube" to (null as Set<String>?))
+    compatibleWith("com.google.android.youtube" to setOf("21.07.247", "21.13.164"))
 
     extendWith("hebrew-helper.dex")
 
     execute {
-
-        // ── Injection 0: URL interceptor ─────────────────────────────────────────
-        val urlClassDef = transcriptUrlFingerprint.classDefOrNull
-            ?: throw PatchException("Could not find CronetEngine.newUrlRequestBuilder call site")
-
-        transcriptUrlFingerprint.match(urlClassDef).method.apply {
-            val urlIndex = indexOfNewUrlRequestBuilderInstruction()
-            val invoke = getInstruction<FiveRegisterInstruction>(urlIndex)
-            val cronetReg   = invoke.registerC
-            val urlReg      = invoke.registerD
-            val callbackReg = invoke.registerE
-            val executorReg = invoke.registerF
-
-            val usedRegs = setOf(cronetReg, urlReg, callbackReg, executorReg)
-            val tempReg = (0..15).first { it !in usedRegs }
-
-            addInstructionsWithLabels(
-                urlIndex,
-                """
-                invoke-static { v$cronetReg, v$urlReg, v$callbackReg, v$executorReg }, $HELPER->saveTimedtextRequest(Ljava/lang/Object;Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Object;)V
-                invoke-static { }, Landroid/app/ActivityThread;->currentApplication()Landroid/app/Application;
-                move-result-object v$tempReg
-                invoke-static { v$tempReg }, $HELPER->isEnabled(Landroid/content/Context;)Z
-                move-result v$tempReg
-                if-eqz v$tempReg, :skip
-                const-string v$tempReg, "timedtext"
-                invoke-virtual { v$urlReg, v$tempReg }, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
-                move-result v$tempReg
-                if-eqz v$tempReg, :skip
-                const-string v$tempReg, "tlang="
-                invoke-virtual { v$urlReg, v$tempReg }, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
-                move-result v$tempReg
-                if-nez v$tempReg, :skip
-                const-string v$tempReg, "&tlang=iw"
-                invoke-virtual { v$urlReg, v$tempReg }, Ljava/lang/String;->concat(Ljava/lang/String;)Ljava/lang/String;
-                move-result-object v$urlReg
-                const/4 v$tempReg, 0x0
-                """,
-                ExternalLabel("skip", getInstruction(urlIndex)),
-            )
+        // The runtime native-row adapter is deliberately scoped to this model.
+        val model = when (packageMetadata.versionName) {
+            "21.07.247" -> Triple("Losm;", "Lanyg;", "o")
+            "21.13.164" -> Triple("Loxg;", "Laolf;", "p")
+            else -> throw PatchException("Unsupported YouTube version: ${packageMetadata.versionName}")
+        }
+        val row = classDefBy(model.first)
+        val track = classDefBy(model.second)
+        if (row.fields.none { it.name == "a" && it.type == model.second } ||
+            track.fields.none { it.name == "a" && it.type == "Ljava/lang/String;" } ||
+            track.fields.none { it.name == model.third && it.type == "Ljava/lang/CharSequence;" }) {
+            throw PatchException("Unexpected subtitle model for YouTube ${packageMetadata.versionName}")
         }
 
-        // ── Injection 1: CC panel Hebrew option ──────────────────────────────────
+
+        // ── Injection 0: URL interceptor at EVERY Cronet call site ────────────
         //
-        // Matches oju.N() by the "SUBTITLE_MENU_BOTTOM_SHEET_FRAGMENT" string and
-        // addFooterView call.  We inject BEFORE YouTube's addFooterView so our
-        // item appears immediately below the track list, above YouTube's footer.
+        // Verified in the bytecode that YouTube builds requests through SEVERAL
+        // HTTP clients — there are multiple CronetEngine.newUrlRequestBuilder
+        // call sites. Hooking only one made Hebrew work only intermittently and
+        // come back slowly after the app was backgrounded, because some subtitle
+        // (timedtext) fetches went through the other clients and bypassed us.
         //
-        // p0 = oju instance (this), v$listViewReg = the ListView.
-        // The helper stores a WeakRef to oju for reflection-based track switching.
-        val subtitleSheetClassDef = subtitleMenuSheetFingerprint.classDefOrNull
-        if (subtitleSheetClassDef != null) {
-            try {
-                subtitleMenuSheetFingerprint.match(subtitleSheetClassDef).method.apply {
-                    val footerIdx = indexOfAddFooterViewInstruction()
-                    val listViewReg = getInstruction<FiveRegisterInstruction>(footerIdx).registerC
-                    addInstruction(
-                        footerIdx,
-                        "invoke-static { p0, v$listViewReg }, $HELPER->injectHebrewOption(Ljava/lang/Object;Landroid/widget/ListView;)V",
+        // We now hook them ALL. interceptTimedtextUrl() ignores any URL that does
+        // not contain "timedtext", so every other request passes through
+        // untouched and only Hebrew subtitle fetches are affected.
+        var urlHooks = 0
+        classDefForEach { classDef ->
+            if (classDef.methods.none { it.indexOfNewUrlRequestBuilderInstruction() >= 0 }) return@classDefForEach
+            mutableClassDefBy(classDef).methods.forEach { method ->
+                val urlIndex = method.indexOfNewUrlRequestBuilderInstruction()
+                if (urlIndex < 0) return@forEach
+                try {
+                    val urlReg = method.getInstruction<FiveRegisterInstruction>(urlIndex).registerD
+                    method.addInstructionsWithLabels(
+                        urlIndex,
+                        """
+                        invoke-static { v$urlReg }, $HELPER->interceptTimedtextUrl(Ljava/lang/String;)Ljava/lang/String;
+                        move-result-object v$urlReg
+                        """,
                     )
+                    urlHooks++
+                } catch (_: Exception) {
+                    // call site is not a simple 4-register invoke; skip it
                 }
-            } catch (_: Exception) {
-                // Method match failed — Cronet URL hook still active as fallback.
             }
         }
+        if (urlHooks == 0)
+            throw PatchException("Could not find any CronetEngine.newUrlRequestBuilder call site")
+
+        // Both caption bottom sheets exist in this APK. Patch each matching
+        // implementation instead of using the first fingerprint match only.
+        var menuHooks = 0
+        classDefForEach { classDef ->
+            val isCaptionMenu = classDef.methods.any { method ->
+                method.implementation?.instructions?.any { instruction ->
+                    (instruction.opcode == Opcode.CONST_STRING ||
+                     instruction.opcode == Opcode.CONST_STRING_JUMBO) &&
+                    ((instruction as? ReferenceInstruction)?.reference as? StringReference)?.string ==
+                        "SUBTITLE_MENU_BOTTOM_SHEET_FRAGMENT"
+                } == true
+            }
+            if (!isCaptionMenu) return@classDefForEach
+            mutableClassDefBy(classDef).methods.forEach { method ->
+                val footerIdx = method.indexOfCaptionFooterInstruction()
+                if (footerIdx < 0) return@forEach
+                val listViewReg = method.getInstruction<FiveRegisterInstruction>(footerIdx).registerC
+                method.addInstruction(footerIdx,
+                    "invoke-static { p0, v$listViewReg }, $HELPER->injectHebrewOption(Ljava/lang/Object;Landroid/widget/ListView;)V")
+                menuHooks++
+            }
+        }
+        if (menuHooks != 2) throw PatchException(
+            "Expected 2 caption menus, found $menuHooks (checked native and Morphe flyout footer calls)"
+        )
+        println("Hebrew subtitles: installed $urlHooks URL hooks and $menuHooks menu hooks")
     }
 }

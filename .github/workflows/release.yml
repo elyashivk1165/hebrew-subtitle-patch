@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - codex/morphe-mpp
 
 jobs:
   release:
@@ -71,13 +72,27 @@ jobs:
           ORG_GRADLE_PROJECT_githubPackagesPassword: ${{ secrets.GITHUB_TOKEN }}
         run: |
           chmod +x gradlew
-          ./gradlew :patches:buildAndroid
+          ./gradlew :patches:verifyPatchBundle :patches:exportVerificationTools
+
+      - name: Upload MPP
+        uses: actions/upload-artifact@v4
+        with:
+          name: hebrew-subtitles-morphe
+          path: patches/build/libs/*.mpp
+          if-no-files-found: error
+
+      - name: Upload verification tools
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-tools
+          path: patches/build/verification-tools/
 
       - name: Create Release
+        if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.0.${{ github.run_number }}
-          name: Hebrew Subtitle Patch v1.0.${{ github.run_number }}
-          files: "patches/build/libs/*.rvp"
+          name: Hebrew Subtitle Patch for Morphe v1.0.${{ github.run_number }}
+          files: "patches/build/libs/*.mpp"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
