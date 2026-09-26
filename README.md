@@ -54,3 +54,12 @@ and validates the model by the APK version.
 The remote source stays at `morphe-source/patches-bundle.json`. Its version and
 binary are updated together after APK patch execution and DEX serialization
 pass locally. Playback still requires an on-device check.
+
+## Version-independent caption detection
+
+The patch no longer keeps a per-version table of obfuscated names. At runtime the
+helper recognises a caption row by shape: it holds a track object with a
+language-code `String` and a non-empty `CharSequence` display name, and real
+caption rows share one class. Patch-time hooks were already located by
+signature. A new YouTube version therefore needs only an on-device check, not a
+code change, unless YouTube changes the caption model itself.

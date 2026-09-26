@@ -15,10 +15,16 @@ import android.widget.TextView;
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
- * Hebrew captions for YouTube 21.07.247 and 21.13.164. Select an existing caption through
- * the native ListView callback, which performs both selection and rendering.
+ * Hebrew captions for YouTube. Select an existing caption through the native
+ * ListView callback, which performs both selection and rendering. Caption rows
+ * are recognised by shape, so no obfuscated names are tied to one version.
  * Keep timedtext rewriting armed until the user selects another native row.
  */
 public final class HebrewSubtitlesHelper {
@@ -315,29 +321,30 @@ public final class HebrewSubtitlesHelper {
         if (listener == null) return false;
         try {
             android.widget.ListAdapter adapter = list.getAdapter();
-            for (int position = 0; position < adapter.getCount(); position++) {
+            // Caption rows are found by shape, not by obfuscated class/field
+            // names, which change with every YouTube version: a row holds a
+            // track object with a language-code String and a display name.
+            int count = adapter.getCount();
+            Object[] tracks = new Object[count];
+            Map<Class<?>, Integer> rowClasses = new HashMap<>();
+            for (int position = 0; position < count; position++) {
                 Object row = adapter.getItem(position);
-                // These mappings are verified from the supported APKs and
-                // checked by the patcher before installing the extension.
                 if (row == null) continue;
-                String rowClass = row.getClass().getName();
-                boolean newerModel = rowClass.equals("oxg");
-                if (!newerModel && !rowClass.equals("osm")) continue;
-                Field trackField = row.getClass().getDeclaredField("a");
-                trackField.setAccessible(true);
-                Object track = trackField.get(row);
-                if (track == null || !track.getClass().getName().equals(newerModel ? "aolf" : "anyg")) continue;
-                Field languageField = track.getClass().getDeclaredField("a");
-                languageField.setAccessible(true);
-                String language = (String) languageField.get(track);
-                if (language == null || !language.matches("[a-z]{2,3}([_-][A-Za-z0-9]{2,8})*")) continue;
-                Field nameField = track.getClass().getDeclaredField(newerModel ? "p" : "o");
-                nameField.setAccessible(true);
-                Object name = nameField.get(track);
-                borrowedName = name == null ? null : name.toString();
-                hebrewVideoId = null;
+                tracks[position] = findTrack(row);
+                if (tracks[position] != null) rowClasses.merge(row.getClass(), 1, Integer::sum);
+            }
+            // Real caption rows share one class; ignore stray matches of other row types.
+            Class<?> rowClass = null;
+            for (Map.Entry<Class<?>, Integer> e : rowClasses.entrySet()) {
+                if (rowClass == null || e.getValue() > rowClasses.get(rowClass)) rowClass = e.getKey();
+            }
+            for (int position = 0; position < count; position++) {
+                Object track = tracks[position];
+                if (track == null || adapter.getItem(position).getClass() != rowClass) continue;
                 View rowView = list.getChildAt(position - list.getFirstVisiblePosition());
                 if (rowView == null) rowView = adapter.getView(position, null, list);
+                borrowedName = displayName(track, rowView);
+                hebrewVideoId = null;
                 hebrewSelected = true;
                 selectingHebrew = true;
                 try {
@@ -345,7 +352,9 @@ public final class HebrewSubtitlesHelper {
                 } finally {
                     selectingHebrew = false;
                 }
-                android.util.Log.d(TAG, "Selected native caption row for Hebrew: " + language);
+                android.util.Log.d(TAG, "Selected native caption row for Hebrew: "
+                        + rowClass.getName() + " / " + track.getClass().getName()
+                        + " (" + borrowedName + ")");
                 return true;
             }
             android.util.Log.w(TAG, "No real caption row in current menu");
@@ -354,6 +363,77 @@ public final class HebrewSubtitlesHelper {
         }
         hebrewSelected = false;
         return false;
+    }
+
+    /** Returns the row field holding a caption track, or null if this is not a caption row. */
+    private static Object findTrack(Object row) throws IllegalAccessException {
+        for (Field field : instanceFields(row.getClass())) {
+            if (field.getType().isPrimitive() || isFrameworkType(field.getType())) continue;
+            Object value = field.get(row);
+            if (value == null || isFrameworkType(value.getClass())) continue;
+            if (hasLanguageCode(value) && !displayNames(value).isEmpty()) return value;
+        }
+        return null;
+    }
+
+    private static boolean hasLanguageCode(Object track) throws IllegalAccessException {
+        for (Field field : instanceFields(track.getClass())) {
+            if (field.getType() != String.class) continue;
+            String value = (String) field.get(track);
+            if (value != null && value.matches("[a-z]{2,3}([_-][A-Za-z0-9]{2,8})*")) return true;
+        }
+        return false;
+    }
+
+    private static List<String> displayNames(Object track) throws IllegalAccessException {
+        List<String> names = new ArrayList<>();
+        for (Field field : instanceFields(track.getClass())) {
+            if (field.getType() != CharSequence.class) continue;
+            CharSequence value = (CharSequence) field.get(track);
+            if (value != null && value.length() > 0) names.add(value.toString());
+        }
+        return names;
+    }
+
+    /** Prefers the track name shown in the row, so the relabel targets the right text. */
+    private static String displayName(Object track, View rowView) throws IllegalAccessException {
+        List<String> names = displayNames(track);
+        for (String name : names) {
+            if (rowView != null && containsText(rowView, name)) return name;
+        }
+        return names.isEmpty() ? null : names.get(0);
+    }
+
+    private static boolean containsText(View v, String text) {
+        if (v instanceof TextView) {
+            CharSequence t = ((TextView) v).getText();
+            return t != null && text.contentEquals(t);
+        }
+        if (v instanceof ViewGroup) {
+            ViewGroup vg = (ViewGroup) v;
+            for (int i = 0; i < vg.getChildCount(); i++) {
+                if (containsText(vg.getChildAt(i), text)) return true;
+            }
+        }
+        return false;
+    }
+
+    private static List<Field> instanceFields(Class<?> cls) {
+        List<Field> fields = new ArrayList<>();
+        for (Class<?> c = cls; c != null && !isFrameworkType(c); c = c.getSuperclass()) {
+            for (Field field : c.getDeclaredFields()) {
+                if (Modifier.isStatic(field.getModifiers())) continue;
+                field.setAccessible(true);
+                fields.add(field);
+            }
+        }
+        return fields;
+    }
+
+    private static boolean isFrameworkType(Class<?> cls) {
+        String name = cls.getName();
+        return cls.isArray() || name.startsWith("java.") || name.startsWith("javax.")
+                || name.startsWith("android.") || name.startsWith("kotlin.");
     }
 
     private static int dp(Context ctx, float dp) {

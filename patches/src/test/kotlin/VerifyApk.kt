@@ -33,7 +33,7 @@ fun main(args: Array<String>) = runBlocking {
                         }
                     }
                 }
-                check(hebrewCalls == 2 && morpheCalls == 2) {
+                check(hebrewCalls >= 1 && hebrewCalls == morpheCalls) {
                     "Missing combined menu hooks: Hebrew=$hebrewCalls, Morphe=$morpheCalls"
                 }
                 println("COMBINED HOOKS PASSED: Hebrew=$hebrewCalls, Morphe=$morpheCalls")

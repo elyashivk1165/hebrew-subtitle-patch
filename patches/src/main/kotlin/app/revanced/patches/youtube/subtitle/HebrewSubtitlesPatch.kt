@@ -60,20 +60,8 @@ val hebrewSubtitlesPatch = bytecodePatch(
     extendWith("hebrew-helper.dex")
 
     execute {
-        // The runtime native-row adapter is deliberately scoped to this model.
-        val model = when (packageMetadata.versionName) {
-            "21.07.247" -> Triple("Losm;", "Lanyg;", "o")
-            "21.13.164" -> Triple("Loxg;", "Laolf;", "p")
-            else -> throw PatchException("Unsupported YouTube version: ${packageMetadata.versionName}")
-        }
-        val row = classDefBy(model.first)
-        val track = classDefBy(model.second)
-        if (row.fields.none { it.name == "a" && it.type == model.second } ||
-            track.fields.none { it.name == "a" && it.type == "Ljava/lang/String;" } ||
-            track.fields.none { it.name == model.third && it.type == "Ljava/lang/CharSequence;" }) {
-            throw PatchException("Unexpected subtitle model for YouTube ${packageMetadata.versionName}")
-        }
-
+        // No version table: the helper finds caption rows by shape at runtime,
+        // and every hook below is located by signature, not obfuscated name.
 
         // ── Injection 0: URL interceptor at EVERY Cronet call site ────────────
         //
@@ -110,7 +98,7 @@ val hebrewSubtitlesPatch = bytecodePatch(
         if (urlHooks == 0)
             throw PatchException("Could not find any CronetEngine.newUrlRequestBuilder call site")
 
-        // Both caption bottom sheets exist in this APK. Patch each matching
+        // Recent APKs contain two caption bottom sheets. Patch each matching
         // implementation instead of using the first fingerprint match only.
         var menuHooks = 0
         classDefForEach { classDef ->
@@ -132,8 +120,8 @@ val hebrewSubtitlesPatch = bytecodePatch(
                 menuHooks++
             }
         }
-        if (menuHooks != 2) throw PatchException(
-            "Expected 2 caption menus, found $menuHooks (checked native and Morphe flyout footer calls)"
+        if (menuHooks == 0) throw PatchException(
+            "Could not find the caption menu (checked native and Morphe flyout footer calls)"
         )
         println("Hebrew subtitles: installed $urlHooks URL hooks and $menuHooks menu hooks")
     }
