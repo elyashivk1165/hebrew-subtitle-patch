@@ -1,6 +1,6 @@
 {
-  "version": "1.2.1",
-  "created_at": "2026-09-10T00:27:08Z",
-  "description": "Fixes caption-menu detection after Morphe Patches 1.42.0 replaces the footer call. Supports YouTube 21.07.247 and 21.13.164. Playback still requires on-device verification.",
-  "download_url": "https://raw.githubusercontent.com/elyashivk1165/hebrew-subtitle-patch/morphe-source/patches-1.2.1.mpp"
+  "version": "1.3.0",
+  "created_at": "2026-09-26T19:39:19Z",
+  "description": "Finds caption rows by shape instead of per-version obfuscated names, so newer YouTube versions (e.g. 21.16.256) no longer fail with 'Unsupported YouTube version'. Verified on-device on 21.07.247 and 21.13.164 with earlier bundles; newer versions still require on-device verification.",
+  "download_url": "https://raw.githubusercontent.com/elyashivk1165/hebrew-subtitle-patch/morphe-source/patches-1.3.0.mpp"
 }
