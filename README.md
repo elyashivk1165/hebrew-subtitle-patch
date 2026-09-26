@@ -63,3 +63,13 @@ language-code `String` and a non-empty `CharSequence` display name, and real
 caption rows share one class. Patch-time hooks were already located by
 signature. A new YouTube version therefore needs only an on-device check, not a
 code change, unless YouTube changes the caption model itself.
+
+## Remote source URL
+
+Add this URL as a remote source in Morphe Manager:
+
+    https://raw.githubusercontent.com/elyashivk1165/hebrew-subtitle-patch/refs/heads/morphe-source/patches-bundle.json
+
+Keep the `refs/heads/` form. Morphe Manager rewrites the branch of a plain
+`raw.githubusercontent.com/<owner>/<repo>/<branch>/...` URL to `main` (or `dev`
+for pre-releases), and this repository has no bundle JSON on `main`.
