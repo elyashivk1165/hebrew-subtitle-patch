@@ -55,7 +55,7 @@ val hebrewSubtitlesPatch = bytecodePatch(
     "Hebrew auto-translated subtitles",
     "Adds a Hebrew option to the CC panel using direct track selection with URL interception fallback.",
 ) {
-    compatibleWith("com.google.android.youtube" to setOf("21.07.247", "21.13.164"))
+    compatibleWith("com.google.android.youtube" to setOf("21.07.247", "21.13.164", "21.16.256"))
 
     extendWith("hebrew-helper.dex")
 

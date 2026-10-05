@@ -1,5 +1,5 @@
 group = "app.revanced"
-version = "1.3.0"
+version = "1.3.1"
 
 patches {
     about {
