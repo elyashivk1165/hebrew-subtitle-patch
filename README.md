@@ -46,7 +46,7 @@ The user APK remains local; it is not uploaded to this repository or CI.
 
 ## YouTube 21.13.164 support (bundle 1.2.0)
 
-The supported versions are 21.07.247 and 21.13.164. Inspection of the new APK
+The supported versions are 21.07.247, 21.13.164 and 21.16.256. Inspection of the new APK
 confirmed that native caption selection still performs both selection and
 rendering, but the row/track classes and label field changed. The patch selects
 and validates the model by the APK version.

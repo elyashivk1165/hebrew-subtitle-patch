@@ -1,7 +1,7 @@
 {
-  "created_at": "2026-09-26T19:39:19",
-  "description": "Finds caption rows by shape instead of per-version obfuscated names, so newer YouTube versions (e.g. 21.16.256) no longer fail with 'Unsupported YouTube version'. Verified on-device on 21.07.247 and 21.13.164 with earlier bundles; newer versions still require on-device verification.",
-  "download_url": "https://raw.githubusercontent.com/elyashivk1165/hebrew-subtitle-patch/morphe-source/patches-1.3.0.mpp",
+  "created_at": "2026-10-05T00:55:54",
+  "description": "Declares YouTube 21.16.256 as compatible. Caption rows are found by shape instead of per-version obfuscated names. Verified on-device on 21.07.247 and 21.13.164 with earlier bundles; 21.16.256 still requires on-device verification.",
+  "download_url": "https://raw.githubusercontent.com/elyashivk1165/hebrew-subtitle-patch/refs/heads/morphe-source/patches-1.3.1.mpp",
   "signature_download_url": "",
-  "version": "1.3.0"
+  "version": "1.3.1"
 }
